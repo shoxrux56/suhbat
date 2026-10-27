@@ -48,6 +48,10 @@ button:active{transform:scale(.96)}button:disabled{opacity:.6}
 .rb.go span{background:linear-gradient(135deg,#38e97d,#1fbf5b);border:0}
 .rb.nx span{width:84px;height:84px;font-size:36px;background:linear-gradient(135deg,#ff5db1,#7a4dff);border:0;box-shadow:0 10px 30px rgba(122,77,255,.55)}
 .rb.nx{color:#fff}
+.dbg{display:flex;flex-direction:column;gap:6px;background:var(--card);border:1px solid var(--ln);border-radius:16px;padding:10px 12px;font-size:13px;color:var(--mu)}
+.dbg .ln{display:flex;align-items:center;gap:8px}.dbg .ln>span{width:64px;white-space:nowrap}
+.mt{flex:1;height:8px;border-radius:6px;background:rgba(255,255,255,.14);overflow:hidden}.mt i{display:block;height:100%;width:0;background:linear-gradient(90deg,#38e97d,#ffc83d);transition:width .08s}
+#hint{color:var(--yl);font-weight:700;min-height:0}
 /* o'yin */
 .big{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:18px;border-radius:22px;text-transform:none;letter-spacing:0}
 .row{display:flex;gap:10px}.row>*{flex:1}
@@ -98,12 +102,18 @@ button:active{transform:scale(.96)}button:disabled{opacity:.6}
 <section id="st" class="scr" hidden>
   <div class="stage search" id="stage"><i class="r"></i><i class="r"></i><i class="r"></i><div class="avatar" id="av">🌍</div></div>
   <h2 id="stt">Qidirilmoqda…</h2><p id="sub"></p>
+  <div class="dbg" id="dbg" hidden>
+    <div class="ln"><span>🎤 Siz</span><div class="mt"><i id="mbar"></i></div></div>
+    <div class="ln"><span>🔊 U</span><div class="mt"><i id="rbar"></i></div></div>
+    <div id="via"></div><div id="hint"></div>
+  </div>
   <div class="card" id="inv" hidden><b>🎮 Suhbatdoshingiz o'yin o'ynashni taklif qilyapti</b><p class="mu small" style="margin:6px 0 10px;text-align:left">Rol olasiz, navbat bilan 20 soniya gapirasiz, AI tekshiradi.</p><div class="row"><button class="green" id="iyes">Qabul ✅</button><button class="red" id="ino">Rad ❌</button></div></div>
   <div class="bar" id="ctl" hidden>
     <button class="rb" id="mute"><span id="mi">🎤</span>Mikrofon</button>
     <button class="rb nx" id="next"><span>⏭</span>Keyingi</button>
     <button class="rb go" id="gbtn"><span>🎮</span><b id="gl">O'yin</b></button>
   </div>
+  <button class="ghost" id="snd" hidden>🔊 Ovoz chiqmayaptimi? Shuni bosing</button>
   <button class="ghost" id="exit1">Chiqish</button>
 </section>
 
@@ -157,7 +167,7 @@ var userMuted=false;
 function muteUi(){var on=!!(micTrack()&&micTrack().enabled);$("mi").textContent=on?"🎤":"🔇";$("mute").classList.toggle("off",!on)}
 function stage(cls,em){$("stage").className="stage "+cls;if(em)$("av").textContent=em}
 function call(cls,em,t,sub){stage(cls,em);$("stt").textContent=t;$("sub").textContent=sub||""}
-function closePc(){clearTimeout(relayT);if(pc){try{pc.ontrack=pc.onicecandidate=pc.onconnectionstatechange=null;pc.close()}catch(e){}pc=null}pend=[];$("au").srcObject=null;ana=null;stopRelay()}
+function closePc(){clearTimeout(relayT);liveAt=0;$("dbg").hidden=true;$("snd").hidden=true;if(pc){try{pc.ontrack=pc.onicecandidate=pc.onconnectionstatechange=null;pc.close()}catch(e){}pc=null}pend=[];$("au").srcObject=null;ana=null;stopRelay()}
 function stopTimer(){clearInterval(tmr)}
 function flush(my){pend.splice(0).forEach(function(c){my.addIceCandidate(c).catch(function(){})})}
 function bound(){return !$("st").hidden&&!G}
@@ -187,7 +197,8 @@ function playPcm(ab){
 }
 function connected(){
   if(!bound())return;call("live",null,"Gaplashing!","Suhbatdosh bilan ulandingiz");
-  $("ctl").hidden=false;$("ban").hidden=true;
+  $("ctl").hidden=false;$("ban").hidden=true;$("dbg").hidden=false;$("snd").hidden=false;$("hint").textContent="";mMax=iMax=0;liveAt=Date.now();
+  $("via").textContent=relayOn?"Ulanish: server orqali (kechikish bir oz ko'proq)":"Ulanish: to'g'ridan-to'g'ri";
 }
 function startPc(init){
   closePc();var my=pc=new RTCPeerConnection({iceServers:ice});
@@ -204,12 +215,27 @@ function startPc(init){
   if(init)my.createOffer().then(function(o){return my.setLocalDescription(o)}).then(function(){send({t:"offer",d:my.localDescription})});
 }
 /* kim gapiryapti: avatar ovozga qarab "nafas oladi" */
+var micAna,micBuf,mMax=0,iMax=0,liveAt=0;
 function lvLoop(){
-  var lv=0;
+  var lv=0,ml=0;
   if(relayOn){lv=rlv;rlv*=.8}
   else if(ana){ana.getByteTimeDomainData(anaBuf);var s=0;for(var i=0;i<anaBuf.length;i++){var v=(anaBuf[i]-128)/128;s+=v*v}lv=Math.min(1,Math.sqrt(s/anaBuf.length)*5)}
-  $("stage").style.setProperty("--lv",lv.toFixed(2));requestAnimationFrame(lvLoop);
+  if(micAna){micAna.getByteTimeDomainData(micBuf);var q=0;for(var j=0;j<micBuf.length;j++){var w=(micBuf[j]-128)/128;q+=w*w}ml=Math.min(1,Math.sqrt(q/micBuf.length)*5)}
+  $("stage").style.setProperty("--lv",lv.toFixed(2));
+  if(!$("dbg").hidden){$("mbar").style.width=Math.round(ml*100)+"%";$("rbar").style.width=Math.round(lv*100)+"%";mMax=Math.max(mMax,ml);iMax=Math.max(iMax,lv)}
+  requestAnimationFrame(lvLoop);
 }
+setInterval(function(){
+  if($("dbg").hidden||!liveAt)return;
+  if(Date.now()-liveAt>7000){
+    var h="";
+    if(userMic()&&mMax<0.03)h="⚠️ Mikrofoningiz ovoz olmayapti. Telegram/brauzer sozlamasida mikrofonga ruxsat bering va gapirib ko'ring.";
+    else if(iMax<0.03)h="Suhbatdoshingizdan hali ovoz kelmadi (u jim yoki uning mikrofoni ishlamayapti).";
+    $("hint").textContent=h;
+  }
+  if(Date.now()-liveAt>7000){mMax=iMax=0}
+},3000);
+function userMic(){var t=micTrack();return !!(t&&t.enabled)}
 lvLoop();
 
 /* ---------- serverdan xabarlar ---------- */
@@ -317,7 +343,7 @@ function leave(){want=false;stopTimer();stopRec(true);send({t:"leave"});closePc(
 function needMic(cb){
   if(stream)return cb();
   if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){$("homeMsg").textContent="Mikrofon ishlamayapti. Brauzerni yangilang yoki Chrome/Safari'da oching.";return}
-  navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(function(s){stream=s;cb()})
+  navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(function(s){stream=s;try{var c=actx();micAna=c.createAnalyser();micAna.fftSize=256;micBuf=new Uint8Array(256);c.createMediaStreamSource(stream).connect(micAna)}catch(e){}cb()})
    .catch(function(){$("homeMsg").textContent="Mikrofonga ruxsat bering: brauzer sozlamasidan mikrofonni yoqing va qayta urining."});
 }
 $("bTalk").onclick=function(){actx();needMic(function(){show("st");$("ctl").hidden=true;setTrack(true);call("search","🌍","Suhbatdosh qidirilmoqda…","");connect()})};
@@ -326,6 +352,7 @@ $("gbtn").onclick=propose;
 $("iyes").onclick=function(){$("inv").hidden=true;send({t:"gacc"})};
 $("ino").onclick=function(){$("inv").hidden=true;send({t:"gno"})};
 $("next").onclick=nextTalk;
+$("snd").onclick=function(){actx();var a=$("au");if(a.srcObject){var p=a.play();if(p&&p.catch)p.catch(function(){})}$("hint").textContent="Ovoz tizimi qayta yoqildi. Telefoningizning ovoz balandligini ham tekshiring."};
 $("mute").onclick=function(){setTrack(!(micTrack()&&micTrack().enabled))};
 $("exit1").onclick=$("exit2").onclick=$("exit3").onclick=leave;
 $("ready").onclick=function(){$("ready").disabled=true;$("ready").textContent=$("ready").dataset.peer?"Boshlanmoqda…":"Raqib kutilyapti…";send({t:"ready"})};
