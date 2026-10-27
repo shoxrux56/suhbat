@@ -1,43 +1,140 @@
 <!doctype html>
 <html lang="uz" translate="no"><head><meta charset="utf-8"><meta name="google" content="notranslate">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Suhbat</title>
+<title>Rus tilida gaplash</title>
 <style>
-:root{--bg:#f4f7fb;--card:#fff;--tx:#1f2a37;--mu:#6b7785;--gr:#58cc02;--grd:#46a302;--bl:#1cb0f6}
-@media(prefers-color-scheme:dark){:root{--bg:#131f24;--card:#1e2d34;--tx:#eef3f5;--mu:#93a4ad}}
-*{box-sizing:border-box}html,body{margin:0;height:100%}
-body{background:var(--bg);color:var(--tx);font:17px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;align-items:center;justify-content:center;padding:16px}
-.box{width:100%;max-width:420px;background:var(--card);border-radius:28px;padding:34px 22px;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.08)}
-#em{font-size:84px;line-height:1;margin-bottom:6px}
-#em.live{animation:p 1.4s ease-in-out infinite}
-@keyframes p{50%{transform:scale(1.12)}}
-h1{font-size:26px;margin:8px 0 6px}
-#sub{color:var(--mu);margin:0 0 22px;min-height:24px}
-button{font:inherit;font-weight:800;border:0;border-radius:16px;padding:15px 22px;cursor:pointer;width:100%}
-#go{background:var(--gr);color:#fff;box-shadow:0 4px 0 var(--grd);font-size:19px}
-#go:active{transform:translateY(3px);box-shadow:none}
-.row{display:flex;gap:10px}.row button{background:var(--bg);color:var(--tx);box-shadow:0 3px 0 rgba(0,0,0,.12)}
-#next{background:var(--bl)!important;color:#fff!important}
+:root{--bg:#f2f6fa;--card:#fff;--tx:#1f2a37;--mu:#6b7785;--ln:#e3e9ef;--gr:#58cc02;--grd:#46a302;--bl:#1cb0f6;--bld:#1899d6;--rd:#ff4b4b;--rdd:#d33;--yl:#ffc800;--pu:#8549ba;--sh:0 8px 28px rgba(31,42,55,.08)}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1b20;--card:#1b2b32;--tx:#eef3f5;--mu:#93a4ad;--ln:#2c3f48;--sh:0 8px 28px rgba(0,0,0,.35)}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--tx);font:17px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.app{max-width:460px;margin:0 auto;min-height:100vh;padding:18px 16px calc(18px + env(safe-area-inset-bottom));display:flex;flex-direction:column}
+.scr{flex:1;display:flex;flex-direction:column;justify-content:center;gap:14px;animation:in .3s ease}
+@keyframes in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 [hidden]{display:none!important}
-</style></head><body>
-<div class="box">
-  <div id="em">🎙</div>
-  <h1 id="st">Gaplashish</h1>
-  <p id="sub">Tugmani bosing: suhbatdosh o'zi topiladi</p>
-  <button id="go">Boshlash</button>
-  <div class="row" id="ctl" hidden><button id="mute">🎤 Yoqiq</button><button id="next">⏭ Keyingi</button></div>
+h1{font-size:28px;line-height:1.15;margin:0;text-align:center}h2{font-size:22px;margin:0;text-align:center}
+.mu{color:var(--mu);text-align:center;margin:0}
+.logo{font-size:88px;text-align:center;line-height:1;animation:bob 2.4s ease-in-out infinite}
+@keyframes bob{50%{transform:translateY(-8px)}}
+button{font:inherit;font-weight:800;border:0;border-radius:18px;padding:15px 20px;cursor:pointer;color:#fff;transition:transform .08s}
+button:active{transform:translateY(3px)}
+.btn{width:100%;font-size:18px;text-transform:uppercase;letter-spacing:.4px}
+.green{background:var(--gr);box-shadow:0 5px 0 var(--grd)}.green:active{box-shadow:0 2px 0 var(--grd)}
+.blue{background:var(--bl);box-shadow:0 5px 0 var(--bld)}.blue:active{box-shadow:0 2px 0 var(--bld)}
+.red{background:var(--rd);box-shadow:0 5px 0 var(--rdd)}
+.ghost{background:transparent;color:var(--mu);box-shadow:none;font-weight:700;padding:10px}
+.big{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:18px;border-radius:22px;text-transform:none;letter-spacing:0}
+.big .ic{font-size:40px;line-height:1}.big b{display:block;font-size:20px}.big small{display:block;font-weight:600;opacity:.92;font-size:14px;line-height:1.3;margin-top:2px}
+.card{background:var(--card);border:2px solid var(--ln);border-radius:22px;padding:16px;box-shadow:var(--sh)}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.pill{display:inline-block;padding:6px 12px;border-radius:99px;font-weight:800;font-size:14px;background:var(--bg);border:2px solid var(--ln)}
+#em{font-size:84px;line-height:1;text-align:center}#em.live{animation:bob 1.2s ease-in-out infinite}
+#stt{font-size:26px;font-weight:800;text-align:center;margin:0}#sub{text-align:center;color:var(--mu);margin:0;min-height:24px}
+.ctl button{background:var(--card);color:var(--tx);border:2px solid var(--ln);box-shadow:0 3px 0 var(--ln)}
+.ctl #next{background:var(--bl);color:#fff;border-color:var(--bl);box-shadow:0 3px 0 var(--bld)}
+/* intro */
+.scn{text-align:center}.scn .e{font-size:64px;line-height:1}.scn h2{margin:6px 0 2px}
+.roles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.role{border:2px solid var(--ln);border-radius:18px;padding:12px 8px;text-align:center;background:var(--card)}
+.role.me{border-color:var(--gr);background:rgba(88,204,2,.1)}.role small{display:block;color:var(--mu);font-weight:700;font-size:12px;text-transform:uppercase}
+.role b{display:block;font-size:19px;margin-top:2px}.role i{font-style:normal;color:var(--mu);font-size:13px}
+.goal{border-left:5px solid var(--yl);background:rgba(255,200,0,.14);border-radius:12px;padding:10px 12px}
+.say{border-left:5px solid var(--bl);background:rgba(28,176,246,.12);border-radius:12px;padding:10px 12px;font-weight:700}
+.rules{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}
+/* play */
+.hud{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pl{background:var(--card);border:2px solid var(--ln);border-radius:18px;padding:10px;text-align:center}
+.pl.me{border-color:var(--gr)}.pl.act{box-shadow:0 0 0 4px rgba(28,176,246,.35)}
+.pl .nm{font-size:12px;font-weight:800;color:var(--mu);text-transform:uppercase}.pl .rl{font-weight:800;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hs{font-size:22px;letter-spacing:2px;margin-top:2px}.hs.hit{animation:shake .45s}
+@keyframes shake{20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+.stc{font-size:22px;font-weight:900;position:relative}.stc b{color:#e09b00}
+.fly{position:absolute;left:50%;top:0;font-size:30px;pointer-events:none;animation:fly 1.1s ease-out forwards}
+@keyframes fly{from{opacity:1;transform:translate(-50%,0) scale(.6)}to{opacity:0;transform:translate(-50%,-70px) scale(1.7)}}
+.top{display:flex;align-items:center;justify-content:space-between}
+.ring{position:relative;width:150px;height:150px;margin:2px auto}
+.ring svg{width:150px;height:150px;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:11;stroke-linecap:round}
+.ring .bg{stroke:var(--ln)}.ring .fg{stroke:var(--gr);stroke-dasharray:339.3;transition:stroke .3s}.ring.low .fg{stroke:var(--rd)}.ring.other .fg{stroke:var(--bl)}
+.ring .in{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.ring .n{font-size:40px;font-weight:900;line-height:1}.ring .ic{font-size:26px}
+.ring.mic .ic{animation:bob .8s infinite}
+#gst{text-align:center;font-weight:800;font-size:19px;min-height:28px}
+.bars{display:inline-flex;gap:3px;align-items:flex-end;height:20px;vertical-align:middle;margin-left:6px}
+.bars i{width:4px;background:var(--bl);border-radius:2px;animation:eq .8s ease-in-out infinite}
+.bars i:nth-child(2){animation-delay:.2s}.bars i:nth-child(3){animation-delay:.4s}
+@keyframes eq{0%,100%{height:5px}50%{height:20px}}
+.res{border-radius:18px;padding:14px;border:2px solid var(--ln);background:var(--card);animation:in .25s ease}
+.res.ok{border-color:var(--gr);background:rgba(88,204,2,.12)}.res.no{border-color:var(--rd);background:rgba(255,75,75,.1)}
+.res h3{margin:0 0 4px;font-size:19px}.res p{margin:3px 0}.res .fx{font-weight:800}
+.banner{background:rgba(255,200,0,.18);border-radius:12px;padding:8px 12px;font-size:14px;text-align:center}
+.small{font-size:13px}
+</style></head><body><div class="app">
+
+<section id="home" class="scr">
+  <div class="logo">🦊</div>
+  <h1>Rus tilida gaplash</h1>
+  <p class="mu">Haqiqiy odam bilan, haqiqiy vaqtda</p>
+  <button class="big green" id="bGame"><span class="ic">🎮</span><span><b>O'yin</b><small>Rol oling, gapiring, yulduzcha yig'ing</small></span></button>
+  <button class="big blue" id="bTalk"><span class="ic">🗣️</span><span><b>Oddiy suhbat</b><small>Tasodifiy odam bilan erkin gaplashing</small></span></button>
+  <p class="mu small" id="homeMsg"></p>
+</section>
+
+<section id="st" class="scr" hidden>
+  <div id="em">⏳</div><h2 id="stt">Qidirilmoqda…</h2><p id="sub"></p>
+  <div class="row ctl" id="ctl" hidden><button id="mute">🎤 Yoqiq</button><button id="next">⏭ Keyingi</button></div>
+  <button class="ghost" id="exit1">Chiqish</button>
+</section>
+
+<section id="intro" class="scr" hidden>
+  <div class="scn card"><div class="e" id="ie">🏥</div><h2 id="it">Vaziyat</h2><p class="mu" id="ip"></p></div>
+  <div class="roles"><div class="role me"><small>Sizning rolingiz</small><b id="ir1"></b><i id="iu1"></i></div>
+  <div class="role"><small>Raqibingiz</small><b id="ir2"></b><i id="iu2"></i></div></div>
+  <div class="goal"><b>Maqsad:</b> <span id="ig"></span></div>
+  <div class="say" id="isay"></div>
+  <div class="rules"><span class="pill">⏱ 20 soniya</span><span class="pill">❤️ 3 yurakcha</span><span class="pill">⭐ to'g'ri = yulduzcha</span></div>
+  <button class="btn green" id="ready">Tayyorman ✅</button>
+  <button class="ghost" id="exit2">Chiqish</button>
+</section>
+
+<section id="play" class="scr" hidden style="justify-content:flex-start">
+  <div class="top"><button class="ghost" id="exit3">✕ Chiqish</button><span class="pill" id="turnno">1/12</span></div>
+  <div class="hud">
+    <div class="pl me" id="pme"><div class="nm">Siz</div><div class="rl" id="rme"></div><div class="hs" id="hme"></div><div class="stc" id="cme">⭐ <b id="sme">0</b></div></div>
+    <div class="pl" id="pop"><div class="nm">Raqib</div><div class="rl" id="rop"></div><div class="hs" id="hop"></div><div class="stc" id="cop">⭐ <b id="sop">0</b></div></div>
+  </div>
+  <div class="mu small" id="sctx"></div>
+  <div class="ring" id="ring"><svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="54"/><circle class="fg" id="fg" cx="60" cy="60" r="54"/></svg>
+    <div class="in"><div class="ic" id="ric">🎤</div><div class="n" id="rc">20</div></div></div>
+  <div id="gst"></div>
+  <button class="btn green" id="done" hidden>Tayyor ✅</button>
+  <div class="res" id="res" hidden></div>
+  <div class="banner" id="ban" hidden></div>
+</section>
+
+<section id="end" class="scr" hidden>
+  <div id="ee" style="font-size:90px;text-align:center;line-height:1">🏆</div><h1 id="et">Siz yutdingiz!</h1><p class="mu" id="es"></p>
+  <div class="hud"><div class="pl me"><div class="nm">Siz</div><div class="hs" id="ehm"></div><div class="stc">⭐ <b id="esm">0</b></div></div>
+  <div class="pl"><div class="nm">Raqib</div><div class="hs" id="eho"></div><div class="stc">⭐ <b id="eso">0</b></div></div></div>
+  <button class="btn green" id="again">Yana o'ynash</button>
+  <button class="btn blue" id="homeBtn">Bosh sahifa</button>
+</section>
 </div>
 <audio id="au" autoplay playsinline></audio>
 <script>
 (function(){
 var $=function(i){return document.getElementById(i)};
-var ws,pc,stream,ice=[],pend=[],active=false,tg=window.Telegram&&window.Telegram.WebApp;
+var ws,pc,stream,ice=[],pend=[],mode=null,G=null,want=null,rec=null,chunks=[],tmr=0,C=339.3,tg=window.Telegram&&window.Telegram.WebApp;
 if(tg){try{tg.ready();tg.expand()}catch(e){}}
-function ui(em,st,sub,live){$("em").textContent=em;$("em").className=live?"live":"";$("st").textContent=st;$("sub").textContent=sub||""}
+function show(id){["home","st","intro","play","end"].forEach(function(s){$(s).hidden=s!==id})}
+function ui(em,t,sub,live){$("em").textContent=em;$("em").className=live?"live":"";$("stt").textContent=t;$("sub").textContent=sub||""}
 function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}
+function hearts(n){var s="";for(var i=0;i<(G?G.hearts:3);i++)s+=i<n?"❤️":"🖤";return s}
+function setTrack(on){if(stream)stream.getAudioTracks().forEach(function(t){t.enabled=on})}
 function closePc(){if(pc){try{pc.ontrack=pc.onicecandidate=pc.onconnectionstatechange=null;pc.close()}catch(e){}pc=null}pend=[];$("au").srcObject=null}
-function waitUi(n){ui("⏳","Suhbatdosh kutilyapti",n>1?"Hozir saytda "+n+" kishi bor, tez ulanadi":"Hozircha siz yolg'izsiz. Boshqa kirganda darhol ulanasiz")}
+function stopTimer(){clearInterval(tmr)}
 function flush(my){pend.splice(0).forEach(function(c){my.addIceCandidate(c).catch(function(){})})}
+
+/* ---------- ovoz ulanishi (odamlar bir-birini eshitadi) ---------- */
 function startPc(init){
   closePc();var my=pc=new RTCPeerConnection({iceServers:ice});
   stream.getTracks().forEach(function(t){my.addTrack(t,stream)});
@@ -45,35 +142,143 @@ function startPc(init){
   my.onicecandidate=function(e){if(e.candidate&&pc===my)send({t:"ice",d:e.candidate})};
   my.onconnectionstatechange=function(){
     if(pc!==my)return;var s=my.connectionState;
-    if(s==="connected")ui("🗣","Gaplashing!","Suhbatdosh bilan ulandingiz",true);
-    else if(s==="failed"){ui("⚠️","Ulanib bo'lmadi","Boshqa suhbatdosh qidirilmoqda…");next()}
-    else if(s==="disconnected")setTimeout(function(){if(pc===my&&my.connectionState==="disconnected"){next()}},5000);
+    if(s==="connected"){if(!G)ui("🗣","Gaplashing!","Suhbatdosh bilan ulandingiz",true);$("ban").hidden=true}
+    else if(s==="failed"||s==="disconnected"){
+      if(G){$("ban").hidden=false;$("ban").textContent="Ovoz ulanmadi. O'yin davom etadi: raqib gapini matn ko'rinishida ko'rasiz."}
+      else if(s==="failed"){ui("⚠️","Ulanib bo'lmadi","Boshqa suhbatdosh qidirilmoqda…");nextTalk()}
+    }
   };
-  ui("🔗","Ulanmoqda…","Bir soniya");
   if(init)my.createOffer().then(function(o){return my.setLocalDescription(o)}).then(function(){send({t:"offer",d:my.localDescription})});
 }
+
+/* ---------- serverdan xabarlar ---------- */
 function onMsg(m){
-  if(m.t==="hello"){ice=m.ice||[];if(active)send({t:"join"})}
-  else if(m.t==="wait"){if(!pc)waitUi(m.n)}
-  else if(m.t==="match")startPc(m.init);
-  else if(m.t==="left"){closePc();ui("👋","Suhbatdosh chiqib ketdi","Yangisi qidirilmoqda…");send({t:"join"})}
+  if(m.t==="hello"){ice=m.ice||[];if(want){send({t:"join",mode:want});}}
+  else if(m.t==="nogame"){want=null;show("home");$("homeMsg").textContent="O'yin hozircha o'chiq (AI ulanmagan). Oddiy suhbatni sinab ko'ring.";}
+  else if(m.t==="wait"){if(!pc&&!G){ui("⏳",m.mode==="game"?"Raqib qidirilmoqda…":"Suhbatdosh kutilyapti",m.n>1?"Hozir saytda "+m.n+" kishi bor. Tez ulanadi":"Hozircha siz yolg'izsiz. Boshqa kirganda darhol ulanasiz")}}
+  else if(m.t==="match"){
+    if(m.mode==="talk"){mode="talk";show("st");$("ctl").hidden=false;setTrack(true);startPc(m.init);ui("🔗","Ulanmoqda…","Bir soniya")}
+    else{mode="game";G={me:m.me,secs:m.secs,hearts:m.hearts,turns:m.turns,sc:m.sc,you:m.you,other:m.other,first:m.first,open:m.open,h:[m.hearts,m.hearts],s:[0,0],active:false};
+      setTrack(false);startPc(m.init);intro()}
+  }
+  else if(m.t==="peer_ready"){$("ready").dataset.peer="1"}
+  else if(m.t==="turn"&&G)turn(m);
+  else if(m.t==="judging"&&G){stopTimer();$("ring").className="ring other";$("ric").textContent="🤖";$("gst").textContent="AI tekshiryapti…";$("done").hidden=true}
+  else if(m.t==="result"&&G)result(m);
+  else if(m.t==="end"&&G)endGame(m);
+  else if(m.t==="left"){
+    closePc();
+    if(G){var g0=G;stopTimer();stopRec(true);G=null;setTrack(false);endScreen("🏃","Raqib chiqib ketdi","O'yin tugadi. Yangisini boshlashingiz mumkin.",[g0.h[g0.me],g0.h[1-g0.me]],[g0.s[g0.me],g0.s[1-g0.me]],true,g0.active)}
+    else if(mode==="talk"){ui("👋","Suhbatdosh chiqib ketdi","Yangisi qidirilmoqda…");send({t:"join",mode:"talk"})}
+  }
   else if(m.t==="offer"&&pc){var my=pc;my.setRemoteDescription(m.d).then(function(){flush(my);return my.createAnswer()}).then(function(a){return my.setLocalDescription(a)}).then(function(){send({t:"answer",d:my.localDescription})})}
   else if(m.t==="answer"&&pc){var q=pc;q.setRemoteDescription(m.d).then(function(){flush(q)})}
   else if(m.t==="ice"&&pc){if(pc.remoteDescription)pc.addIceCandidate(m.d).catch(function(){});else pend.push(m.d)}
 }
 function open(){
   ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
-  ws.onmessage=function(e){try{onMsg(JSON.parse(e.data))}catch(x){}};
-  ws.onclose=function(){if(active){closePc();ui("📡","Aloqa uzildi","Qayta ulanmoqda…");setTimeout(open,1500)}};
+  ws.onmessage=function(e){try{onMsg(JSON.parse(e.data))}catch(x){console.log(x)}};
+  ws.onclose=function(){
+    if(G){var g0=G;G=null;stopTimer();stopRec(true);closePc();endScreen("📡","Aloqa uzildi","Internetni tekshirib, qayta urining.",[g0.h[g0.me],g0.h[1-g0.me]],[g0.s[g0.me],g0.s[1-g0.me]],true,g0.active);want=null;return}
+    if(want){closePc();ui("📡","Aloqa uzildi","Qayta ulanmoqda…");setTimeout(open,1500)}
+  };
 }
-function next(){closePc();ui("⏳","Qidirilmoqda…","");send({t:"join"})}
-$("go").onclick=function(){
-  if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){ui("⚠️","Mikrofon yo'q","Brauzerni yangilang yoki Chrome/Safari'da oching");return}
-  navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(function(s){
-    stream=s;active=true;$("go").hidden=true;$("ctl").hidden=false;$("au").play().catch(function(){});ui("⏳","Ulanmoqda…","");open();
-  }).catch(function(){ui("🎤","Mikrofonga ruxsat bering","Brauzer sozlamasidan mikrofonni yoqing, so'ng qayta urining")});
-};
-$("next").onclick=next;
-$("mute").onclick=function(){var on=!(stream.getAudioTracks()[0].enabled);stream.getAudioTracks().forEach(function(t){t.enabled=on});$("mute").textContent=on?"🎤 Yoqiq":"🔇 O'chiq"};
+function connect(w){
+  want=w;
+  if(ws&&ws.readyState===1)send({t:"join",mode:w});
+  else if(!ws||ws.readyState>1)open();
+}
+
+/* ---------- o'yin ekranlari ---------- */
+function intro(){
+  show("intro");$("ie").textContent=G.sc.em;$("it").textContent=G.sc.title;$("ip").textContent=G.sc.place;
+  $("ir1").textContent=G.you.ru;$("iu1").textContent=G.you.uz;$("ir2").textContent=G.other.ru;$("iu2").textContent=G.other.uz;
+  $("ig").textContent=G.you.goal;
+  $("isay").textContent=G.first?"Siz birinchi gapirasiz. Masalan: «"+G.open+"»":"Raqib birinchi gapiradi. Diqqat bilan eshiting.";
+  $("ready").disabled=false;$("ready").textContent="Tayyorman ✅";
+}
+function hud(){
+  $("hme").textContent=hearts(G.h[G.me]);$("hop").textContent=hearts(G.h[1-G.me]);
+  $("sme").textContent=G.s[G.me];$("sop").textContent=G.s[1-G.me];
+}
+function runTimer(secs,cls,onEnd){
+  stopTimer();var dl=Date.now()+secs*1000,r=$("ring");r.className="ring "+cls;
+  function tick(){var left=Math.max(0,dl-Date.now());$("rc").textContent=Math.ceil(left/1000);$("fg").style.strokeDashoffset=C*(1-left/(secs*1000));
+    r.classList.toggle("low",left<5000&&cls==="mic");if(left<=0){stopTimer();if(onEnd)onEnd()}}
+  tick();tmr=setInterval(tick,100);
+}
+function turn(m){
+  if(!G.active){G.active=true;show("play");$("rme").textContent=G.you.uz;$("rop").textContent=G.other.uz;$("sctx").textContent=G.sc.em+" "+G.sc.title+" · Maqsad: "+G.you.goal;hud()}
+  $("turnno").textContent=m.n+"/"+G.turns;$("res").hidden=true;
+  $("pme").classList.toggle("act",m.mine);$("pop").classList.toggle("act",!m.mine);
+  if(m.mine){
+    setTrack(true);startRec();$("ric").textContent="🎤";$("gst").textContent="Sizning navbatingiz: gapiring!";$("done").hidden=false;$("done").disabled=false;
+    runTimer(G.secs,"mic",function(){finishSpeak()});
+  }else{
+    setTrack(false);$("ric").textContent="👂";$("gst").innerHTML="Raqib gapiryapti<span class=bars><i></i><i></i><i></i></span>";$("done").hidden=true;
+    runTimer(G.secs,"other");
+  }
+}
+function startRec(){
+  var mt=["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/ogg;codecs=opus"].filter(function(t){return window.MediaRecorder&&MediaRecorder.isTypeSupported(t)})[0];
+  try{rec=new MediaRecorder(stream,mt?{mimeType:mt}:{})}catch(e){rec=null;return}
+  chunks=[];rec.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};
+  var my=rec;rec.onstop=function(){
+    if(my.cancelled)return;var type=my.mimeType||mt||"audio/webm",ext=type.indexOf("mp4")>=0?"mp4":type.indexOf("ogg")>=0?"ogg":"webm";
+    new Blob(chunks,{type:type}).arrayBuffer().then(function(b){if(b.byteLength>1500){send({t:"rec",ext:ext});if(ws&&ws.readyState===1)ws.send(b)}});
+  };
+  rec.start();
+}
+function stopRec(cancel){if(rec){if(cancel)rec.cancelled=true;if(rec.state==="recording")try{rec.stop()}catch(e){}if(cancel)rec=null}}
+function finishSpeak(){stopTimer();$("done").hidden=true;setTrack(false);stopRec(false);$("ric").textContent="🤖";$("gst").textContent="AI tekshiryapti…";$("ring").className="ring other"}
+function fly(id){var s=document.createElement("span");s.className="fly";s.textContent="⭐";$(id).appendChild(s);setTimeout(function(){s.remove()},1200)}
+function result(m){
+  stopTimer();stopRec(true);setTrack(false);
+  G.h=m.hearts;G.s=m.stars;hud();var mine=m.who===G.me,who=mine?"Siz":"Raqib",r=$("res");
+  $("done").hidden=true;$("ring").className="ring";$("ric").textContent=m.ok===true?"⭐":m.ok===false?"💔":"🤖";$("rc").textContent="";
+  var esc=function(t){var d=document.createElement("div");d.textContent=t;return d.innerHTML};
+  var h="";
+  if(m.ok===true){r.className="res ok";h="<h3>✅ "+(mine?"To'g'ri! +1 ⭐":"Raqib to'g'ri gapirdi +1 ⭐")+"</h3>";fly(mine?"cme":"cop")}
+  else if(m.ok===false){r.className="res no";h="<h3>❌ "+(mine?"Xato. Bitta yurakcha ketdi":"Raqib xato qildi")+"</h3>";$(mine?"hme":"hop").classList.add("hit");setTimeout(function(){$("hme").classList.remove("hit");$("hop").classList.remove("hit")},600);if(navigator.vibrate&&mine)navigator.vibrate(120)}
+  else{r.className="res";h="<h3>🤖 Hisobga olinmadi</h3>"}
+  if(m.said)h+="<p>"+(mine?"Siz dedingiz":"Raqib dedi")+": «"+esc(m.said)+"»</p>";
+  if(m.fix)h+="<p class=fx>To'g'risi: "+esc(m.fix)+"</p>";
+  if(m.why)h+="<p>"+esc(m.why)+"</p>";
+  r.innerHTML=h;r.hidden=false;$("gst").textContent="";
+}
+function endGame(m){
+  stopTimer();stopRec(true);setTrack(false);closePc();var me=G.me,w=m.winner;G=null;
+  var em,t,s;
+  if(w===-1){em="🤝";t="Durang!";s="Ikkalangiz ham zo'rsiz."}
+  else if(w===me){em="🏆";t="Siz yutdingiz!";s=m.reason==="hearts"?"Raqibning yurakchalari tugadi.":"Ko'proq yulduzcha yig'dingiz."}
+  else{em="💪";t="Bu safar yutqazdingiz";s=m.reason==="hearts"?"Yurakchalaringiz tugadi. Yana urinib ko'ring!":"Raqib ko'proq yulduzcha yig'di."}
+  endScreen(em,t,s,[m.hearts[me],m.hearts[1-me]],[m.stars[me],m.stars[1-me]],false,true);
+}
+function endScreen(em,t,s,h,st,left,full){
+  show("end");$("ee").textContent=em;$("et").textContent=t;$("es").textContent=s;
+  var hs=function(n){var x="";for(var i=0;i<3;i++)x+=i<n?"❤️":"🖤";return x};
+  $("ehm").textContent=full?hs(h[0]):"";$("eho").textContent=full?hs(h[1]):"";$("esm").textContent=st[0];$("eso").textContent=st[1];
+}
+
+/* ---------- oddiy suhbat ---------- */
+function nextTalk(){closePc();ui("⏳","Qidirilmoqda…","");send({t:"join",mode:"talk"})}
+function leave(){want=null;stopTimer();stopRec(true);send({t:"leave"});closePc();G=null;mode=null;setTrack(true);show("home");$("homeMsg").textContent=""}
+
+/* ---------- tugmalar ---------- */
+function needMic(cb){
+  if(stream)return cb();
+  if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){$("homeMsg").textContent="Mikrofon ishlamayapti. Brauzerni yangilang yoki Chrome/Safari'da oching.";return}
+  navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(function(s){stream=s;cb()})
+   .catch(function(){$("homeMsg").textContent="Mikrofonga ruxsat bering: brauzer sozlamasidan mikrofonni yoqing va qayta urining."});
+}
+$("bGame").onclick=function(){needMic(function(){mode="game";show("st");$("ctl").hidden=true;ui("⏳","Raqib qidirilmoqda…","");setTrack(false);connect("game")})};
+$("bTalk").onclick=function(){needMic(function(){mode="talk";show("st");$("ctl").hidden=false;setTrack(true);ui("⏳","Ulanmoqda…","");connect("talk")})};
+$("next").onclick=nextTalk;
+$("mute").onclick=function(){var on=!stream.getAudioTracks()[0].enabled;setTrack(on);$("mute").textContent=on?"🎤 Yoqiq":"🔇 O'chiq"};
+$("exit1").onclick=$("exit2").onclick=$("exit3").onclick=leave;
+$("ready").onclick=function(){$("ready").disabled=true;$("ready").textContent=$("ready").dataset.peer?"Boshlanmoqda…":"Raqib kutilyapti…";send({t:"ready"})};
+$("done").onclick=function(){finishSpeak()};
+$("again").onclick=function(){mode="game";show("st");$("ctl").hidden=true;ui("⏳","Raqib qidirilmoqda…","");connect("game")};
+$("homeBtn").onclick=leave;
 })();
 </script></body></html>
