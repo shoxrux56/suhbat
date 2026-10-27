@@ -17,8 +17,12 @@ LLM_MODELS = [m for m in os.getenv("LLM_MODELS", "llama-3.3-70b-versatile,llama-
 GATE = asyncio.Semaphore(int(os.getenv("GROQ_PARALLEL", "6")))  # bir vaqtda Groq'ga ketadigan so'rovlar (server qotmasin)
 MAX_AUDIO = 700_000
 
-with open(os.path.join(HERE, "scenarios.json"), encoding="utf-8") as f:
-    SCENARIOS = json.load(f)
+try:
+    with open(os.path.join(HERE, "scenarios.json"), encoding="utf-8") as f:
+        SCENARIOS = json.load(f)
+except (OSError, ValueError):  # fayl yuklanmagan bo'lsa ham sayt va oddiy suhbat ishlayveradi
+    print("scenarios.json topilmadi: o'yin o'chiq")
+    SCENARIOS = []
 
 
 # ---------------- ICE (ovoz ulanishi) ----------------
@@ -154,11 +158,10 @@ async def judge(g, i, text):
 # ---------------- ulanishlar va navbatlar ----------------
 class Peer:
     def __init__(self, ws):
-        self.ws, self.partner, self.game, self.gi, self.ext, self.mode = ws, None, None, 0, "webm", None
+        self.ws, self.partner, self.game, self.gi, self.ext, self.prop = ws, None, None, 0, "webm", False
 
 
-peers = set()
-queues = {"talk": [], "game": []}
+peers, waiting = set(), []
 
 
 async def send(p, obj):
@@ -187,72 +190,66 @@ async def both(g, obj):
 
 
 async def end_game(g, winner, reason):
+    """O'yin tugadi: odamlar suhbatda qoladi (ovoz ulanishi buzilmaydi)."""
     if g.over:
         return
     g.over = True
     g.cancel()
     await both(g, {"t": "end", "winner": winner, "hearts": g.hearts, "stars": g.stars, "reason": reason})
     for p in g.p:
-        p.game = None
-        p.partner = None
+        p.game, p.prop = None, False
 
 
 async def unpair(p):
-    for q in queues.values():
-        if p in q:
-            q.remove(p)
+    if p in waiting:
+        waiting.remove(p)
+    p.prop = False
     g = p.game
     if g and not g.over:
         g.over = True
         g.cancel()
         for x in g.p:
             x.game = None
-            if x is not p:
-                x.partner = None
-                await send(x, {"t": "left"})
-        p.partner = None
-        return
     q = p.partner
     if q:
         p.partner = q.partner = None
+        q.prop = False
         await send(q, {"t": "left"})
 
 
-async def join(p, mode):
+async def join(p):
     await unpair(p)
-    mode = "game" if mode == "game" else "talk"
-    if mode == "game" and not groq_keys():
-        return await send(p, {"t": "nogame"})
-    p.mode = mode
-    queues[mode].append(p)
-    await match(mode)
-    if p in queues[mode]:
-        await send(p, {"t": "wait", "n": len(peers), "mode": mode})
+    waiting.append(p)
+    await match()
+    if p in waiting:
+        await send(p, {"t": "wait", "n": len(peers)})
 
 
-async def match(mode):
-    q = queues[mode]
+async def match():
     while True:
-        q[:] = [x for x in q if not x.ws.closed]
-        if len(q) < 2:
+        waiting[:] = [x for x in waiting if not x.ws.closed]
+        if len(waiting) < 2:
             return
-        a, b = q.pop(0), q.pop(0)
+        a, b = waiting.pop(0), waiting.pop(0)  # kimda kutgani uzun bo'lsa, o'sha taklif yuboradi
         a.partner, b.partner = b, a
-        if mode == "talk":
-            await send(a, {"t": "match", "init": True, "mode": "talk"})
-            await send(b, {"t": "match", "init": False, "mode": "talk"})
-        else:
-            if random.random() < 0.5:
-                a, b = b, a  # kim qaysi rol bo'lishini tasodif hal qiladi
-            g = Game(a, b)
-            a.game, b.game, a.gi, b.gi = g, g, 0, 1
-            for p, i in ((a, 0), (b, 1)):
-                me, ot = (g.sc["a"], g.sc["b"]) if i == 0 else (g.sc["b"], g.sc["a"])
-                await send(p, {"t": "match", "init": p is a, "mode": "game", "me": i, "secs": TURN_SECS, "hearts": HEARTS, "turns": MAX_TURNS,
-                               "sc": {"em": g.sc["em"], "title": g.sc["title"], "place": g.sc["place"]},
-                               "you": me, "other": {"ru": ot["ru"], "uz": ot["uz"]},
-                               "first": i == 0, "open": g.sc["open"] if i == 0 else ""})
-            g.task = asyncio.create_task(ready_timeout(g))
+        await send(a, {"t": "match", "init": True})
+        await send(b, {"t": "match", "init": False})
+
+
+async def start_game(a, b):
+    """Ikki suhbatdosh o'yinga rozi bo'ldi: ovoz o'sha ulanishda davom etadi, faqat rol beriladi."""
+    if random.random() < 0.5:
+        a, b = b, a
+    g = Game(a, b)
+    a.game, b.game, a.gi, b.gi = g, g, 0, 1
+    a.prop = b.prop = False
+    for p, i in ((a, 0), (b, 1)):
+        me, ot = (g.sc["a"], g.sc["b"]) if i == 0 else (g.sc["b"], g.sc["a"])
+        await send(p, {"t": "gstart", "me": i, "secs": TURN_SECS, "hearts": HEARTS, "turns": MAX_TURNS,
+                       "sc": {"em": g.sc["em"], "title": g.sc["title"], "place": g.sc["place"]},
+                       "you": me, "other": {"ru": ot["ru"], "uz": ot["uz"]},
+                       "first": i == 0, "open": g.sc["open"] if i == 0 else ""})
+    g.task = asyncio.create_task(ready_timeout(g))
 
 
 async def ready_timeout(g):
@@ -263,8 +260,8 @@ async def ready_timeout(g):
     if g.state == "ready" and not g.over:
         g.over = True
         for x in g.p:
-            await send(x, {"t": "left"})
-            x.game, x.partner = None, None
+            x.game = None
+            await send(x, {"t": "gcancel"})
 
 
 # ---------------- o'yin yuragi ----------------
@@ -347,7 +344,7 @@ async def ws_handler(request):
     await ws.prepare(request)
     p = Peer(ws)
     peers.add(p)
-    await send(p, {"t": "hello", "ice": ice_servers(), "game": bool(groq_keys())})
+    await send(p, {"t": "hello", "ice": ice_servers(), "game": bool(groq_keys() and SCENARIOS)})
     try:
         async for msg in ws:
             if msg.type == WSMsgType.BINARY:
@@ -361,11 +358,27 @@ async def ws_handler(request):
                 continue
             t = d.get("t")
             if t == "join":
-                await join(p, d.get("mode"))
+                await join(p)
             elif t == "leave":
                 await unpair(p)
             elif t in ("offer", "answer", "ice") and p.partner:
                 await send(p.partner, {"t": t, "d": d.get("d")})
+            elif t == "gprop":  # suhbatdosh o'yinga taklif
+                q = p.partner
+                if not q or p.game or q.game:
+                    continue
+                if not (groq_keys() and SCENARIOS):
+                    await send(p, {"t": "nogame"})
+                elif q.prop:  # u ham taklif qilgan edi: darhol boshlaymiz
+                    await start_game(q, p)
+                else:
+                    p.prop = True
+                    await send(q, {"t": "gprop"})
+            elif t == "gacc" and p.partner and p.partner.prop and not p.game and not p.partner.game:
+                await start_game(p.partner, p)
+            elif t == "gno" and p.partner and p.partner.prop:
+                p.partner.prop = False
+                await send(p.partner, {"t": "gno"})
             elif t == "rec":
                 p.ext = d.get("ext") if d.get("ext") in ("webm", "mp4", "ogg") else "webm"
             elif t == "ready" and p.game and p.game.state == "ready" and not p.game.over:
@@ -387,9 +400,8 @@ async def ws_handler(request):
 async def online_loop():
     while True:
         await asyncio.sleep(4)
-        for mode, q in queues.items():
-            for p in list(q):
-                await send(p, {"t": "wait", "n": len(peers), "mode": mode})
+        for p in list(waiting):
+            await send(p, {"t": "wait", "n": len(peers)})
 
 
 async def page(request):

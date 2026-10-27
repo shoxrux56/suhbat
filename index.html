@@ -74,13 +74,14 @@ button:active{transform:translateY(3px)}
   <div class="logo">🦊</div>
   <h1>Rus tilida gaplash</h1>
   <p class="mu">Haqiqiy odam bilan, haqiqiy vaqtda</p>
-  <button class="big green" id="bGame"><span class="ic">🎮</span><span><b>O'yin</b><small>Rol oling, gapiring, yulduzcha yig'ing</small></span></button>
-  <button class="big blue" id="bTalk"><span class="ic">🗣️</span><span><b>Oddiy suhbat</b><small>Tasodifiy odam bilan erkin gaplashing</small></span></button>
+  <button class="big green" id="bTalk"><span class="ic">🗣️</span><span><b>Gaplashishni boshlash</b><small>Tasodifiy odam bilan gaplashing. Xohlasangiz, birga o'yin ham o'ynaysiz 🎮</small></span></button>
   <p class="mu small" id="homeMsg"></p>
 </section>
 
 <section id="st" class="scr" hidden>
   <div id="em">⏳</div><h2 id="stt">Qidirilmoqda…</h2><p id="sub"></p>
+  <button class="btn green" id="gbtn" hidden>🎮 O'yin o'ynaymizmi?</button>
+  <div class="card" id="inv" hidden><b>🎮 Suhbatdoshingiz o'yin o'ynashni taklif qilyapti</b><p class="mu small" style="margin:6px 0 10px">Rol olasiz, navbat bilan 20 soniya gapirasiz, AI tekshiradi.</p><div class="row"><button class="green" id="iyes">Qabul ✅</button><button class="red" id="ino">Rad ❌</button></div></div>
   <div class="row ctl" id="ctl" hidden><button id="mute">🎤 Yoqiq</button><button id="next">⏭ Keyingi</button></div>
   <button class="ghost" id="exit1">Chiqish</button>
 </section>
@@ -142,7 +143,7 @@ function startPc(init){
   my.onicecandidate=function(e){if(e.candidate&&pc===my)send({t:"ice",d:e.candidate})};
   my.onconnectionstatechange=function(){
     if(pc!==my)return;var s=my.connectionState;
-    if(s==="connected"){if(!G)ui("🗣","Gaplashing!","Suhbatdosh bilan ulandingiz",true);$("ban").hidden=true}
+    if(s==="connected"){if(!G&&!$("st").hidden){ui("🗣","Gaplashing!","Suhbatdosh bilan ulandingiz",true);$("gbtn").hidden=false}$("ban").hidden=true}
     else if(s==="failed"||s==="disconnected"){
       if(G){$("ban").hidden=false;$("ban").textContent="Ovoz ulanmadi. O'yin davom etadi: raqib gapini matn ko'rinishida ko'rasiz."}
       else if(s==="failed"){ui("⚠️","Ulanib bo'lmadi","Boshqa suhbatdosh qidirilmoqda…");nextTalk()}
@@ -153,14 +154,16 @@ function startPc(init){
 
 /* ---------- serverdan xabarlar ---------- */
 function onMsg(m){
-  if(m.t==="hello"){ice=m.ice||[];if(want){send({t:"join",mode:want});}}
-  else if(m.t==="nogame"){want=null;show("home");$("homeMsg").textContent="O'yin hozircha o'chiq (AI ulanmagan). Oddiy suhbatni sinab ko'ring.";}
-  else if(m.t==="wait"){if(!pc&&!G){ui("⏳",m.mode==="game"?"Raqib qidirilmoqda…":"Suhbatdosh kutilyapti",m.n>1?"Hozir saytda "+m.n+" kishi bor. Tez ulanadi":"Hozircha siz yolg'izsiz. Boshqa kirganda darhol ulanasiz")}}
-  else if(m.t==="match"){
-    if(m.mode==="talk"){mode="talk";show("st");$("ctl").hidden=false;setTrack(true);startPc(m.init);ui("🔗","Ulanmoqda…","Bir soniya")}
-    else{mode="game";G={me:m.me,secs:m.secs,hearts:m.hearts,turns:m.turns,sc:m.sc,you:m.you,other:m.other,first:m.first,open:m.open,h:[m.hearts,m.hearts],s:[0,0],active:false};
-      setTrack(false);startPc(m.init);intro()}
-  }
+  if(m.t==="hello"){ice=m.ice||[];if(want)send({t:"join"})}
+  else if(m.t==="nogame"){resetG("O'yin hozircha o'chiq (AI ulanmagan)")}
+  else if(m.t==="wait"){if(!pc&&!G){ui("⏳","Suhbatdosh kutilyapti",m.n>1?"Hozir saytda "+m.n+" kishi bor. Tez ulanadi":"Hozircha siz yolg'izsiz. Boshqa kirganda darhol ulanasiz")}}
+  else if(m.t==="match"){show("st");$("ctl").hidden=false;$("gbtn").hidden=true;$("inv").hidden=true;setTrack(true);startPc(m.init);ui("🔗","Ulanmoqda…","Bir soniya")}
+  else if(m.t==="gstart"){
+    G={me:m.me,secs:m.secs,hearts:m.hearts,turns:m.turns,sc:m.sc,you:m.you,other:m.other,first:m.first,open:m.open,h:[m.hearts,m.hearts],s:[0,0],active:false};
+    setTrack(false);$("inv").hidden=true;intro()}
+  else if(m.t==="gprop"){if(!G){$("inv").hidden=false}}
+  else if(m.t==="gno"){resetG("Suhbatdosh hozir o'ynashni xohlamadi")}
+  else if(m.t==="gcancel"){G=null;stopTimer();showCall("O'yin boshlanmadi: ikkalangiz tayyor bo'lmadingiz")}
   else if(m.t==="peer_ready"){$("ready").dataset.peer="1"}
   else if(m.t==="turn"&&G)turn(m);
   else if(m.t==="judging"&&G){stopTimer();$("ring").className="ring other";$("ric").textContent="🤖";$("gst").textContent="AI tekshiryapti…";$("done").hidden=true}
@@ -168,8 +171,9 @@ function onMsg(m){
   else if(m.t==="end"&&G)endGame(m);
   else if(m.t==="left"){
     closePc();
-    if(G){var g0=G;stopTimer();stopRec(true);G=null;setTrack(false);endScreen("🏃","Raqib chiqib ketdi","O'yin tugadi. Yangisini boshlashingiz mumkin.",[g0.h[g0.me],g0.h[1-g0.me]],[g0.s[g0.me],g0.s[1-g0.me]],true,g0.active)}
-    else if(mode==="talk"){ui("👋","Suhbatdosh chiqib ketdi","Yangisi qidirilmoqda…");send({t:"join",mode:"talk"})}
+    $("gbtn").hidden=true;$("inv").hidden=true;
+    if(G){var g0=G;stopTimer();stopRec(true);G=null;setTrack(false);gone=true;endScreen("🏃","Suhbatdosh chiqib ketdi","O'yin tugadi. Yangi suhbatdosh topishingiz mumkin.",[g0.h[g0.me],g0.h[1-g0.me]],[g0.s[g0.me],g0.s[1-g0.me]],true,g0.active)}
+    else{setTrack(true);ui("👋","Suhbatdosh chiqib ketdi","Yangisi qidirilmoqda…");send({t:"join"})}
   }
   else if(m.t==="offer"&&pc){var my=pc;my.setRemoteDescription(m.d).then(function(){flush(my);return my.createAnswer()}).then(function(a){return my.setLocalDescription(a)}).then(function(){send({t:"answer",d:my.localDescription})})}
   else if(m.t==="answer"&&pc){var q=pc;q.setRemoteDescription(m.d).then(function(){flush(q)})}
@@ -179,14 +183,20 @@ function open(){
   ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
   ws.onmessage=function(e){try{onMsg(JSON.parse(e.data))}catch(x){console.log(x)}};
   ws.onclose=function(){
-    if(G){var g0=G;G=null;stopTimer();stopRec(true);closePc();endScreen("📡","Aloqa uzildi","Internetni tekshirib, qayta urining.",[g0.h[g0.me],g0.h[1-g0.me]],[g0.s[g0.me],g0.s[1-g0.me]],true,g0.active);want=null;return}
+    if(G){var g0=G;G=null;stopTimer();stopRec(true);closePc();endScreen("📡","Aloqa uzildi","Internetni tekshirib, qayta urining.",[g0.h[g0.me],g0.h[1-g0.me]],[g0.s[g0.me],g0.s[1-g0.me]],true,g0.active);gone=true;$("again").textContent="🔄 Qayta ulanish";want=true;return}
     if(want){closePc();ui("📡","Aloqa uzildi","Qayta ulanmoqda…");setTimeout(open,1500)}
   };
 }
-function connect(w){
-  want=w;
-  if(ws&&ws.readyState===1)send({t:"join",mode:w});
+function connect(){
+  want=true;
+  if(ws&&ws.readyState===1)send({t:"join"});
   else if(!ws||ws.readyState>1)open();
+}
+var gone=false,gT=0;
+function resetG(msg){clearTimeout(gT);$("gbtn").disabled=false;$("gbtn").textContent="🎮 O'yin o'ynaymizmi?";if(msg){$("sub").textContent=msg;gT=setTimeout(function(){if(!G&&$("sub").textContent===msg)$("sub").textContent="Suhbatdosh bilan ulandingiz"},4000)}}
+function showCall(msg){
+  show("st");setTrack(true);$("ctl").hidden=false;$("inv").hidden=true;resetG();
+  var ok=pc&&pc.connectionState==="connected";ui(ok?"🗣":"🔗",ok?"Gaplashing!":"Ulanmoqda…",msg||"Suhbatdosh bilan ulandingiz",ok);$("gbtn").hidden=!ok;
 }
 
 /* ---------- o'yin ekranlari ---------- */
@@ -247,7 +257,7 @@ function result(m){
   r.innerHTML=h;r.hidden=false;$("gst").textContent="";
 }
 function endGame(m){
-  stopTimer();stopRec(true);setTrack(false);closePc();var me=G.me,w=m.winner;G=null;
+  stopTimer();stopRec(true);setTrack(false);var me=G.me,w=m.winner;G=null;gone=false;
   var em,t,s;
   if(w===-1){em="🤝";t="Durang!";s="Ikkalangiz ham zo'rsiz."}
   else if(w===me){em="🏆";t="Siz yutdingiz!";s=m.reason==="hearts"?"Raqibning yurakchalari tugadi.":"Ko'proq yulduzcha yig'dingiz."}
@@ -255,14 +265,15 @@ function endGame(m){
   endScreen(em,t,s,[m.hearts[me],m.hearts[1-me]],[m.stars[me],m.stars[1-me]],false,true);
 }
 function endScreen(em,t,s,h,st,left,full){
+  gone=!!left;$("again").textContent=gone?"🎙 Yangi suhbatdosh":"🎮 Yana o'ynash";$("homeBtn").textContent=gone?"Bosh sahifa":"🎙 Suhbatga qaytish";
   show("end");$("ee").textContent=em;$("et").textContent=t;$("es").textContent=s;
   var hs=function(n){var x="";for(var i=0;i<3;i++)x+=i<n?"❤️":"🖤";return x};
   $("ehm").textContent=full?hs(h[0]):"";$("eho").textContent=full?hs(h[1]):"";$("esm").textContent=st[0];$("eso").textContent=st[1];
 }
 
 /* ---------- oddiy suhbat ---------- */
-function nextTalk(){closePc();ui("⏳","Qidirilmoqda…","");send({t:"join",mode:"talk"})}
-function leave(){want=null;stopTimer();stopRec(true);send({t:"leave"});closePc();G=null;mode=null;setTrack(true);show("home");$("homeMsg").textContent=""}
+function nextTalk(){closePc();show("st");$("ctl").hidden=false;$("gbtn").hidden=true;$("inv").hidden=true;setTrack(true);ui("⏳","Qidirilmoqda…","");connect()}
+function leave(){want=null;stopTimer();stopRec(true);send({t:"leave"});closePc();G=null;gone=false;setTrack(true);$("gbtn").hidden=true;$("inv").hidden=true;show("home");$("homeMsg").textContent=""}
 
 /* ---------- tugmalar ---------- */
 function needMic(cb){
@@ -271,14 +282,17 @@ function needMic(cb){
   navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(function(s){stream=s;cb()})
    .catch(function(){$("homeMsg").textContent="Mikrofonga ruxsat bering: brauzer sozlamasidan mikrofonni yoqing va qayta urining."});
 }
-$("bGame").onclick=function(){needMic(function(){mode="game";show("st");$("ctl").hidden=true;ui("⏳","Raqib qidirilmoqda…","");setTrack(false);connect("game")})};
-$("bTalk").onclick=function(){needMic(function(){mode="talk";show("st");$("ctl").hidden=false;setTrack(true);ui("⏳","Ulanmoqda…","");connect("talk")})};
+$("bTalk").onclick=function(){needMic(function(){show("st");$("ctl").hidden=false;$("gbtn").hidden=true;setTrack(true);ui("⏳","Ulanmoqda…","");connect()})};
+function propose(){send({t:"gprop"});$("gbtn").disabled=true;$("gbtn").textContent="⏳ Taklif yuborildi…";clearTimeout(gT);gT=setTimeout(function(){if(!G)resetG()},20000)}
+$("gbtn").onclick=propose;
+$("iyes").onclick=function(){$("inv").hidden=true;send({t:"gacc"})};
+$("ino").onclick=function(){$("inv").hidden=true;send({t:"gno"})};
 $("next").onclick=nextTalk;
 $("mute").onclick=function(){var on=!stream.getAudioTracks()[0].enabled;setTrack(on);$("mute").textContent=on?"🎤 Yoqiq":"🔇 O'chiq"};
 $("exit1").onclick=$("exit2").onclick=$("exit3").onclick=leave;
 $("ready").onclick=function(){$("ready").disabled=true;$("ready").textContent=$("ready").dataset.peer?"Boshlanmoqda…":"Raqib kutilyapti…";send({t:"ready"})};
 $("done").onclick=function(){finishSpeak()};
-$("again").onclick=function(){mode="game";show("st");$("ctl").hidden=true;ui("⏳","Raqib qidirilmoqda…","");connect("game")};
-$("homeBtn").onclick=leave;
+$("again").onclick=function(){if(gone){nextTalk()}else{showCall();propose()}};
+$("homeBtn").onclick=function(){if(gone)leave();else showCall()};
 })();
 </script></body></html>
