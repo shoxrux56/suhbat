@@ -159,6 +159,7 @@ async def judge(g, i, text):
 class Peer:
     def __init__(self, ws):
         self.ws, self.partner, self.game, self.gi, self.ext, self.prop = ws, None, None, 0, "webm", False
+        self.relay, self.avoid = False, set()  # relay: ovoz server orqali ketadi (to'g'ridan-to'g'ri ulanmasa); avoid: yaqinda juftlangan odamlar
 
 
 peers, waiting = set(), []
@@ -211,9 +212,10 @@ async def unpair(p):
         for x in g.p:
             x.game = None
     q = p.partner
+    p.relay = False
     if q:
         p.partner = q.partner = None
-        q.prop = False
+        q.prop = q.relay = False
         await send(q, {"t": "left"})
 
 
@@ -225,13 +227,28 @@ async def join(p):
         await send(p, {"t": "wait", "n": len(peers)})
 
 
+def pick():
+    """Yangi odamni afzal ko'radi: yaqinda gaplashgan juftlikni qayta ulamaydi. Boshqa odam bo'lmasa, o'shalarni ham ulaydi."""
+    w = waiting
+    for i, a in enumerate(w):
+        for b in w[i + 1:]:
+            if id(b) not in a.avoid and id(a) not in b.avoid:
+                return a, b
+    return w[0], w[1]
+
+
 async def match():
     while True:
         waiting[:] = [x for x in waiting if not x.ws.closed]
         if len(waiting) < 2:
             return
-        a, b = waiting.pop(0), waiting.pop(0)  # kimda kutgani uzun bo'lsa, o'sha taklif yuboradi
+        a, b = pick()
+        waiting.remove(a)
+        waiting.remove(b)
         a.partner, b.partner = b, a
+        a.avoid.add(id(b)); b.avoid.add(id(a))
+        if len(a.avoid) > 30: a.avoid.clear()
+        if len(b.avoid) > 30: b.avoid.clear()
         await send(a, {"t": "match", "init": True})
         await send(b, {"t": "match", "init": False})
 
@@ -344,11 +361,19 @@ async def ws_handler(request):
     await ws.prepare(request)
     p = Peer(ws)
     peers.add(p)
-    await send(p, {"t": "hello", "ice": ice_servers(), "game": bool(groq_keys() and SCENARIOS)})
+    await send(p, {"t": "hello", "ice": ice_servers(), "game": bool(groq_keys() and SCENARIOS), "n": len(peers)})
     try:
         async for msg in ws:
             if msg.type == WSMsgType.BINARY:
-                await on_audio(p, msg.data)
+                d0 = msg.data
+                if d0[:1] == b"\x01":  # jonli ovoz (relay): sherikka o'tkazamiz
+                    if p.relay and p.partner:
+                        try:
+                            await p.partner.ws.send_bytes(d0)
+                        except Exception:
+                            pass
+                elif d0[:1] == b"\x00":  # o'yin: ovoz yozuvi (hakam uchun)
+                    await on_audio(p, d0[1:])
                 continue
             if msg.type != WSMsgType.TEXT:
                 continue
@@ -379,6 +404,10 @@ async def ws_handler(request):
             elif t == "gno" and p.partner and p.partner.prop:
                 p.partner.prop = False
                 await send(p.partner, {"t": "gno"})
+            elif t == "relay" and p.partner and not p.relay:  # to'g'ridan-to'g'ri ulanmadi: ovozni server orqali o'tkazamiz
+                p.relay = p.partner.relay = True
+                await send(p, {"t": "relay"})
+                await send(p.partner, {"t": "relay"})
             elif t == "rec":
                 p.ext = d.get("ext") if d.get("ext") in ("webm", "mp4", "ogg") else "webm"
             elif t == "ready" and p.game and p.game.state == "ready" and not p.game.over:
@@ -400,8 +429,9 @@ async def ws_handler(request):
 async def online_loop():
     while True:
         await asyncio.sleep(4)
-        for p in list(waiting):
-            await send(p, {"t": "wait", "n": len(peers)})
+        n = len(peers)
+        for p in list(peers):
+            await send(p, {"t": "online", "n": n})
 
 
 async def page(request):
