@@ -105,6 +105,7 @@ button:active{transform:scale(.96)}button:disabled{opacity:.6}
   <div class="dbg" id="dbg" hidden>
     <div class="ln"><span>🎤 Siz</span><div class="mt"><i id="mbar"></i></div></div>
     <div class="ln"><span>🔊 U</span><div class="mt"><i id="rbar"></i></div></div>
+    <div class="ln"><span>🔈 Ovoz</span><input type="range" id="vol" min="0" max="100" value="60" style="flex:1;accent-color:#7a4dff"><b id="vp" style="width:42px;text-align:right">60%</b></div>
     <div id="via"></div><div id="hint"></div>
   </div>
   <div class="card" id="inv" hidden><b>🎮 Suhbatdoshingiz o'yin o'ynashni taklif qilyapti</b><p class="mu small" style="margin:6px 0 10px;text-align:left">Rol olasiz, navbat bilan 20 soniya gapirasiz, AI tekshiradi.</p><div class="row"><button class="green" id="iyes">Qabul ✅</button><button class="red" id="ino">Rad ❌</button></div></div>
@@ -173,7 +174,8 @@ function flush(my){pend.splice(0).forEach(function(c){my.addIceCandidate(c).catc
 function bound(){return !$("st").hidden&&!G}
 
 /* ---------- jonli ovoz: to'g'ridan-to'g'ri (WebRTC), bo'lmasa server orqali (relay) ---------- */
-var ac,proc,srcN,playT=0,ana,anaBuf,rlv=0;
+var ac,proc,srcN,playT=0,ana,anaBuf,rlv=0,vol=0.6,outG;
+function applyVol(){$("au").volume=vol;if(outG)outG.gain.value=vol;$("vp").textContent=Math.round(vol*100)+"%"}
 function actx(){if(!ac){var A=window.AudioContext||window.webkitAudioContext;ac=new A()}if(ac.state==="suspended")ac.resume();return ac}
 function startRelay(){
   if(relayOn)return;relayOn=true;clearTimeout(relayT);var c=actx();
@@ -192,7 +194,8 @@ function playPcm(ab){
   if(!relayOn||ab.byteLength<3)return;var c=actx(),i16=new Int16Array(ab.slice(1,1+((ab.byteLength-1)&~1))),f=new Float32Array(i16.length),s=0;
   for(var i=0;i<i16.length;i++){f[i]=i16[i]/32768;s+=f[i]*f[i]}
   rlv=Math.max(rlv,Math.min(1,Math.sqrt(s/i16.length)*5));
-  var buf=c.createBuffer(1,f.length,16000);buf.getChannelData(0).set(f);var node=c.createBufferSource();node.buffer=buf;node.connect(c.destination);
+  var buf=c.createBuffer(1,f.length,16000);buf.getChannelData(0).set(f);if(!outG){outG=c.createGain();outG.connect(c.destination);outG.gain.value=vol}
+  var node=c.createBufferSource();node.buffer=buf;node.connect(outG);
   var now=c.currentTime;if(playT<now+0.04||playT>now+0.9)playT=now+0.12;node.start(playT);playT+=buf.duration;
 }
 function connected(){
@@ -352,6 +355,9 @@ $("gbtn").onclick=propose;
 $("iyes").onclick=function(){$("inv").hidden=true;send({t:"gacc"})};
 $("ino").onclick=function(){$("inv").hidden=true;send({t:"gno"})};
 $("next").onclick=nextTalk;
+$("vol").oninput=function(){vol=this.value/100;applyVol();try{localStorage.setItem("vol",this.value)}catch(e){}};
+try{var sv=localStorage.getItem("vol");if(sv!==null&&+sv>=0&&+sv<=100){vol=+sv/100;$("vol").value=sv}}catch(e){}
+applyVol();
 $("snd").onclick=function(){actx();var a=$("au");if(a.srcObject){var p=a.play();if(p&&p.catch)p.catch(function(){})}$("hint").textContent="Ovoz tizimi qayta yoqildi. Telefoningizning ovoz balandligini ham tekshiring."};
 $("mute").onclick=function(){setTrack(!(micTrack()&&micTrack().enabled))};
 $("exit1").onclick=$("exit2").onclick=$("exit3").onclick=leave;
