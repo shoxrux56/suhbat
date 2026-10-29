@@ -2,7 +2,7 @@
   • Oddiy suhbat: ikki odam juftlanadi, ovoz ularning o'rtasida to'g'ridan-to'g'ri ketadi (server faqat signal tashiydi).
   • O'yin: ikkalasi «O'yin» ni bosadi -> rol beriladi -> navbat bilan 20 soniya gapiradi -> AI to'g'ri/xatoni aniqlaydi.
 Baza yo'q: hammasi xotirada. 100 ta vaziyat scenarios.json faylida."""
-import asyncio, hmac, json, os, random, re, time
+import asyncio, base64, hashlib, hmac, json, os, random, re, time
 import aiohttp
 from aiohttp import web, WSMsgType
 
@@ -16,6 +16,52 @@ STT_MODELS = [m for m in os.getenv("STT_MODELS", "whisper-large-v3-turbo,whisper
 LLM_MODELS = [m for m in os.getenv("LLM_MODELS", "llama-3.3-70b-versatile,llama-3.1-8b-instant").split(",") if m]
 GATE = asyncio.Semaphore(int(os.getenv("GROQ_PARALLEL", "6")))  # bir vaqtda Groq'ga ketadigan so'rovlar (server qotmasin)
 MAX_AUDIO = 700_000
+INVITE_SECS = int(os.getenv("INVITE_SECS", "20"))   # taklifga javob berish vaqti
+DAILY = int(os.getenv("GAMES_PER_DAY", "3"))        # bitta odam kuniga nechta o'yin o'ynay oladi (Groq kalitini tejash uchun)
+SECRET = os.getenv("TALK_SECRET", "").strip()
+TZ_SHIFT = 5 * 3600                                  # Toshkent: kun yarim tunda (00:00) yangilanadi
+USED_FILE = os.path.join(HERE, "games_used.json")
+
+
+def day_no():
+    return int((time.time() + TZ_SHIFT) // 86400)
+
+
+try:
+    with open(USED_FILE, encoding="utf-8") as _f:
+        USED = {k: v for k, v in json.load(_f).items() if isinstance(v, list) and len(v) == 2 and v[0] == day_no()}
+except (OSError, ValueError, AttributeError):
+    USED = {}  # key -> [kun, o'ynalgan o'yinlar soni]
+
+
+def games_left(key):
+    v = USED.get(key)
+    return DAILY if not v or v[0] != day_no() else max(0, DAILY - v[1])
+
+
+def use_game(key):
+    v = USED.get(key)
+    USED[key] = [day_no(), (v[1] if v and v[0] == day_no() else 0) + 1]
+    try:
+        with open(USED_FILE, "w", encoding="utf-8") as f:
+            json.dump(USED, f)
+    except OSError:
+        pass  # diskka yozib bo'lmasa, xotirada qoladi
+
+
+def who(tok, dev, ip):
+    """Odamni aniqlaydi: botdan kelgan imzolangan havola (ishonchli) > qurilma raqami > IP."""
+    if SECRET and tok and "." in tok:
+        body, _, sig = tok.rpartition(".")
+        if hmac.compare_digest(sig, hmac.new(SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()):
+            try:
+                info = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+                if info.get("e", 0) > time.time():
+                    return "u%s" % info["u"]
+            except (ValueError, KeyError, TypeError):
+                pass
+    dev = re.sub(r"\W", "", str(dev or ""))[:40]
+    return ("d" + dev) if dev else ("i" + (ip or "?"))
 
 try:
     with open(os.path.join(HERE, "scenarios.json"), encoding="utf-8") as f:
@@ -159,6 +205,7 @@ async def judge(g, i, text):
 class Peer:
     def __init__(self, ws):
         self.ws, self.partner, self.game, self.gi, self.ext, self.prop = ws, None, None, 0, "webm", False
+        self.key, self.inv = "i?", None
         self.relay, self.avoid = False, set()  # relay: ovoz server orqali ketadi (to'g'ridan-to'g'ri ulanmasa); avoid: yaqinda juftlangan odamlar
 
 
@@ -178,6 +225,7 @@ class Game:
         self.sc = random.choice(SCENARIOS)
         self.hearts, self.stars, self.ready = [HEARTS, HEARTS], [0, 0], [False, False]
         self.turn, self.state, self.over, self.log = 0, "ready", False, []
+        self.idle = [0, 0]  # ketma-ket jim qolgan navbatlar
         self.task = None
 
     def cancel(self):
@@ -205,6 +253,10 @@ async def unpair(p):
     if p in waiting:
         waiting.remove(p)
     p.prop = False
+    for x in (p, p.partner):
+        if x and x.inv and x.inv is not asyncio.current_task():
+            x.inv.cancel()
+            x.inv = None
     g = p.game
     if g and not g.over:
         g.over = True
@@ -219,7 +271,14 @@ async def unpair(p):
         await send(q, {"t": "left"})
 
 
-async def join(p):
+async def quota(p):
+    await send(p, {"t": "quota", "left": games_left(p.key), "max": DAILY})
+
+
+async def join(p, d=None, ip=""):
+    if d is not None:
+        p.key = who(d.get("tok"), d.get("dev"), ip)
+    await quota(p)
     await unpair(p)
     waiting.append(p)
     await match()
@@ -253,6 +312,30 @@ async def match():
         await send(b, {"t": "match", "init": False})
 
 
+async def invite_timer(p, q):
+    """Taklifga javob berilmasa (odam jim qolsa yoki ketsa), o'yin 'singan yurakcha' bilan bekor bo'ladi."""
+    try:
+        await asyncio.sleep(INVITE_SECS)
+    except asyncio.CancelledError:
+        return
+    p.inv = None
+    if p.prop and p.partner is q and not p.game:
+        p.prop = False
+        for x in (p, q):
+            await send(x, {"t": "gbreak", "why": "timeout"})
+
+
+async def quota_ok(proposer, other):
+    """Ikkalasining ham bugungi o'yin limiti qolganmi? Yo'q bo'lsa, taklif qilgan odamga sababini aytadi."""
+    if games_left(proposer.key) <= 0:
+        await send(proposer, {"t": "noquota", "who": "me", "max": DAILY})
+        return False
+    if games_left(other.key) <= 0:
+        await send(proposer, {"t": "noquota", "who": "other", "max": DAILY})
+        return False
+    return True
+
+
 async def start_game(a, b):
     """Ikki suhbatdosh o'yinga rozi bo'ldi: ovoz o'sha ulanishda davom etadi, faqat rol beriladi."""
     if random.random() < 0.5:
@@ -260,6 +343,10 @@ async def start_game(a, b):
     g = Game(a, b)
     a.game, b.game, a.gi, b.gi = g, g, 0, 1
     a.prop = b.prop = False
+    for x in (a, b):
+        if x.inv:
+            x.inv.cancel()
+            x.inv = None
     for p, i in ((a, 0), (b, 1)):
         me, ot = (g.sc["a"], g.sc["b"]) if i == 0 else (g.sc["b"], g.sc["a"])
         await send(p, {"t": "gstart", "me": i, "secs": TURN_SECS, "hearts": HEARTS, "turns": MAX_TURNS,
@@ -285,6 +372,11 @@ async def ready_timeout(g):
 async def begin_turn(g):
     if g.over:
         return
+    if g.turn == 0 and not getattr(g, "counted", False):  # o'yin haqiqatan boshlandi: ikkalasiga ham 1 ta hisoblanadi
+        g.counted = True
+        for x in g.p:
+            use_game(x.key)
+            await quota(x)
     idx = g.turn % 2
     g.state = "listen"
     for p in g.p:
@@ -299,7 +391,7 @@ async def turn_timeout(g, n):
         return
     if g.turn == n and g.state == "listen" and not g.over:
         g.state = "judge"
-        await settle(g, n % 2, False, "", "", "Vaqt tugadi: hech narsa aytilmadi.")
+        await settle(g, n % 2, False, "", "", "Vaqt tugadi: hech narsa aytilmadi.", idle=True)
 
 
 async def on_audio(p, raw):
@@ -318,20 +410,23 @@ async def run_judge(g, n, i, raw, ext):
         async with GATE:
             text = await asyncio.wait_for(stt(raw, ext), 25)
             if not text:
-                return await settle(g, i, False, "", "", "Hech narsa eshitilmadi. Balandroq va aniqroq gapiring.")
+                return await settle(g, i, False, "", "", "Hech narsa eshitilmadi. Balandroq va aniqroq gapiring.", idle=True)
             ok, fix, why = await asyncio.wait_for(judge(g, i, text), 25)
         g.log.append((i, text))
         await settle(g, i, ok, text, fix, why)
     except asyncio.CancelledError:
         raise
     except Exception as e:  # AI band / xato: o'yinchi jazolanmaydi
-        print("hakam xatosi:", repr(e))
-        await settle(g, i, None, "", "", "AI hozir band, bu navbat hisobga olinmadi.")
+        print("hakam xatosi:", repr(e), "| kalitlar soni:", len(groq_keys()))
+        why = ("AI kaliti saytda yo'q (bot kalitni hali yubormagan). Bu navbat hisobga olinmadi." if not groq_keys()
+               else "AI hozir band, bu navbat hisobga olinmadi.")
+        await settle(g, i, None, "", "", why)
 
 
-async def settle(g, i, ok, said, fix, why):
+async def settle(g, i, ok, said, fix, why, idle=False):
     if g.over:
         return
+    g.idle[i] = g.idle[i] + 1 if idle else 0
     if ok is True:
         g.stars[i] += 1
     elif ok is False:
@@ -341,6 +436,9 @@ async def settle(g, i, ok, said, fix, why):
     if g.hearts[i] <= 0:
         await asyncio.sleep(3)
         return await end_game(g, 1 - i, "hearts")
+    if g.idle[i] >= 2:  # ketma-ket 2 marta jim: odam ketib qolgan, o'yin to'xtaydi
+        await asyncio.sleep(3)
+        return await end_game(g, 1 - i, "idle")
     if g.turn >= MAX_TURNS:
         await asyncio.sleep(3)
         w = -1
@@ -383,7 +481,7 @@ async def ws_handler(request):
                 continue
             t = d.get("t")
             if t == "join":
-                await join(p)
+                await join(p, d, (request.headers.get("X-Forwarded-For", "") or request.remote or "").split(",")[0].strip())
             elif t == "leave":
                 await unpair(p)
             elif t in ("offer", "answer", "ice") and p.partner:
@@ -394,16 +492,33 @@ async def ws_handler(request):
                     continue
                 if not (groq_keys() and SCENARIOS):
                     await send(p, {"t": "nogame"})
+                elif not await quota_ok(p, q):
+                    pass
                 elif q.prop:  # u ham taklif qilgan edi: darhol boshlaymiz
                     await start_game(q, p)
                 else:
                     p.prop = True
                     await send(q, {"t": "gprop"})
+                    if p.inv:
+                        p.inv.cancel()
+                    p.inv = asyncio.create_task(invite_timer(p, q))
             elif t == "gacc" and p.partner and p.partner.prop and not p.game and not p.partner.game:
-                await start_game(p.partner, p)
+                if await quota_ok(p, p.partner):
+                    await start_game(p.partner, p)
+                else:
+                    p.partner.prop = False
+                    if p.partner.inv:
+                        p.partner.inv.cancel()
+                        p.partner.inv = None
+                    await send(p.partner, {"t": "noquota", "who": "other", "max": DAILY})
             elif t == "gno" and p.partner and p.partner.prop:
-                p.partner.prop = False
-                await send(p.partner, {"t": "gno"})
+                q = p.partner
+                q.prop = False
+                if q.inv:
+                    q.inv.cancel()
+                    q.inv = None
+                for x in (p, q):
+                    await send(x, {"t": "gbreak", "why": "no"})
             elif t == "relay" and p.partner and not p.relay:  # to'g'ridan-to'g'ri ulanmadi: ovozni server orqali o'tkazamiz
                 p.relay = p.partner.relay = True
                 await send(p, {"t": "relay"})
@@ -453,6 +568,7 @@ def make_app():
     app.router.add_get("/", page)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
+    app.router.add_get("/status", lambda r: web.json_response({"groq_kalitlar": len(groq_keys()), "stsenariylar": len(SCENARIOS)}))
     app.router.add_post("/keys", keys_in)
     app.on_startup.append(on_start)
     app.on_cleanup.append(on_stop)
