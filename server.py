@@ -89,6 +89,10 @@ class Busy(Exception):
     pass
 
 
+class ModelGone(Exception):
+    pass
+
+
 HTTP = None
 key_cool, key_rr = {}, [0]
 
@@ -129,6 +133,8 @@ async def groq(path, make):
                 if r.status == 429:
                     key_cool[k] = time.time() + 20
                     continue
+                if r.status in (400, 404) and "model" in (await r.text()).lower():
+                    raise ModelGone()
                 if r.status in (401, 402, 403):
                     key_cool[k] = time.time() + 600
                     continue
@@ -140,12 +146,48 @@ async def groq(path, make):
     raise Busy()
 
 
-async def groq_models(path, models, make):
-    for m in models:
+LLM_REFRESHED = [0]
+
+
+async def refresh_llm():
+    """Groq modellar nomini o'zgartirsa (eskisini o'chirsa), mos matn modelini /models dan o'zi tanlaydi."""
+    if time.time() - LLM_REFRESHED[0] < 600:
+        return False
+    LLM_REFRESHED[0] = time.time()
+    for k in groq_keys():
         try:
-            return await groq(path, lambda: make(m))
-        except Busy:
+            async with HTTP.get(GROQ + "/models", headers={"Authorization": "Bearer " + k}, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                if r.status != 200:
+                    continue
+                ids = [m["id"] for m in (await r.json()).get("data", [])]
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             continue
+        bad = re.compile(r"whisper|tts|guard|orpheus|embed|distil|vision|compound|safeguard", re.I)
+
+        def score(m):
+            n = re.search(r"(\d+(?:\.\d+)?)b", m.lower())
+            sz = float(n.group(1)) if n else 0
+            return (sz >= 20, "instruct" in m or "versatile" in m or "gpt-oss" in m, sz)
+        pick = sorted([m for m in ids if not bad.search(m)], key=score, reverse=True)[:3]
+        if pick:
+            LLM_MODELS[:] = pick
+            print("LLM modellari yangilandi:", pick)
+            return True
+    return False
+
+
+async def groq_models(path, models, make):
+    for attempt in range(2):
+        gone = False
+        for m in list(models):
+            try:
+                return await groq(path, lambda: make(m))
+            except ModelGone:
+                gone = True
+            except Busy:
+                continue
+        if not (gone and models is LLM_MODELS and await refresh_llm()):
+            break
     raise Busy()
 
 
