@@ -156,12 +156,16 @@ async def groq(path, make):
     for k in live:
         try:
             async with HTTP.post(GROQ + path, headers={"Authorization": "Bearer " + k}, timeout=aiohttp.ClientTimeout(total=25), **make()) as r:
+                _t = ""
                 if r.status != 200:
                     _t = (await r.text())[:200]
                     KEYST[k] = (r.status, int(time.time()), _t)
                     LAST_ERR[0] = f"{path} {r.status}: {_t}"
                 else:
                     KEYST[k] = (200, int(time.time()), "")
+                if r.status != 200 and re.search(r"restricted|deactivated|suspended|invalid_api_key", _t, re.I):
+                    key_cool[k] = time.time() + 3600   # cheklangan/o'lik kalit: boshqasiga o'tamiz
+                    continue
                 if r.status == 429:
                     key_cool[k] = time.time() + 20
                     continue
