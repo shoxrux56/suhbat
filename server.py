@@ -95,6 +95,8 @@ class ModelGone(Exception):
 
 HTTP = None
 key_cool, key_rr = {}, [0]
+KEYST = {}      # kalit -> (oxirgi HTTP holat, vaqt, qisqa xabar)
+LAST_ERR = [""]
 
 
 PUSHED = []  # bot yuborgan kalitlar (faqat xotirada; bot har 5 daqiqada qayta yuboradi)
@@ -103,6 +105,30 @@ PUSHED = []  # bot yuborgan kalitlar (faqat xotirada; bot har 5 daqiqada qayta y
 def groq_keys():
     ks = (os.getenv("GROQ_API_KEYS", "") + "," + os.getenv("GROQ_API_KEY", "")).split(",") + PUSHED
     return list(dict.fromkeys(k.strip() for k in ks if k.strip()))
+
+
+async def status(request):
+    """/status — kalitlar holati. /status?test=1 — har bir kalitni Groq'da hoziroq sinaydi (kalitning o'zi ko'rsatilmaydi)."""
+    out = {"groq_kalitlar": len(groq_keys()), "stsenariylar": len(SCENARIOS), "matn_modellari": LLM_MODELS, "ovoz_modellari": STT_MODELS,
+           "oxirgi_xato": LAST_ERR[0]}
+    keys = groq_keys()
+    if request.query.get("test"):
+        res = []
+        for k in keys:
+            item = {"kalit": "…" + k[-4:]}
+            try:
+                async with HTTP.get(GROQ + "/models", headers={"Authorization": "Bearer " + k}, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    item["holat"] = r.status
+                    item["javob"] = "ok" if r.status == 200 else (await r.text())[:220]
+            except Exception as e:
+                item["holat"] = 0
+                item["javob"] = "tarmoq: " + repr(e)[:150]
+            res.append(item)
+        out["sinov"] = res
+    else:
+        out["kalitlar"] = [{"kalit": "…" + k[-4:], "oxirgi_holat": KEYST.get(k, ("hali ishlatilmagan",))[0],
+                           "xabar": (KEYST.get(k) or ("", 0, ""))[2]} for k in keys]
+    return web.json_response(out, dumps=lambda o: json.dumps(o, ensure_ascii=False))
 
 
 async def keys_in(request):
@@ -130,6 +156,12 @@ async def groq(path, make):
     for k in live:
         try:
             async with HTTP.post(GROQ + path, headers={"Authorization": "Bearer " + k}, timeout=aiohttp.ClientTimeout(total=25), **make()) as r:
+                if r.status != 200:
+                    _t = (await r.text())[:200]
+                    KEYST[k] = (r.status, int(time.time()), _t)
+                    LAST_ERR[0] = f"{path} {r.status}: {_t}"
+                else:
+                    KEYST[k] = (200, int(time.time()), "")
                 if r.status == 429:
                     key_cool[k] = time.time() + 20
                     continue
@@ -141,7 +173,9 @@ async def groq(path, make):
                 if r.status != 200:
                     raise RuntimeError(f"Groq {r.status}: {(await r.text())[:150]}")
                 return await r.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            KEYST[k] = (0, int(time.time()), "tarmoq: " + repr(e)[:120])
+            LAST_ERR[0] = "tarmoq: " + repr(e)[:150]
             key_cool[k] = time.time() + 10
     raise Busy()
 
@@ -610,7 +644,7 @@ def make_app():
     app.router.add_get("/", page)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
-    app.router.add_get("/status", lambda r: web.json_response({"groq_kalitlar": len(groq_keys()), "stsenariylar": len(SCENARIOS)}))
+    app.router.add_get("/status", status)
     app.router.add_post("/keys", keys_in)
     app.on_startup.append(on_start)
     app.on_cleanup.append(on_stop)
