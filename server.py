@@ -268,10 +268,15 @@ async def judge(g, i, text):
     ctx = "\n".join(f"{(g.sc['a'] if w == 0 else g.sc['b'])['ru']}: {t}" for w, t in g.log[-4:]) or "(suhbat endi boshlandi)"
     user = (f"Vaziyat: {sc['title']} ({sc['place']}). O'quvchining roli: {me['ru']} ({me['uz']}), maqsadi: {me['goal']}. "
             f"Suhbatdosh roli: {other['ru']}.\nOldingi gaplar:\n{ctx}\n\nO'quvchining hozirgi gapi: «{text}»")
-    res = await groq_models("/chat/completions", LLM_MODELS, lambda m: {"json": {
-        "model": m, "temperature": 0, "max_tokens": 220, "response_format": {"type": "json_object"},
-        "messages": [{"role": "system", "content": JUDGE_SYS}, {"role": "user", "content": user}]}})
-    raw = res["choices"][0]["message"]["content"]
+    def make(m):
+        body = {"model": m, "temperature": 0, "max_tokens": 1500,   # "o'ylovchi" modellar javobdan oldin ham so'z sarflaydi
+                "messages": [{"role": "system", "content": JUDGE_SYS}, {"role": "user", "content": user}]}
+        if "gpt-oss" in m:
+            body["reasoning_effort"] = "low"
+        return {"json": body}
+    res = await groq_models("/chat/completions", LLM_MODELS, make)
+    raw = res["choices"][0]["message"].get("content") or ""
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.S)
     try:
         d = json.loads(raw)
     except ValueError:
