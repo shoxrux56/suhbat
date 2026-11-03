@@ -2,7 +2,7 @@
   • Oddiy suhbat: ikki odam juftlanadi, ovoz ularning o'rtasida to'g'ridan-to'g'ri ketadi (server faqat signal tashiydi).
   • O'yin: ikkalasi «O'yin» ni bosadi -> rol beriladi -> navbat bilan 20 soniya gapiradi -> AI to'g'ri/xatoni aniqlaydi.
 Baza yo'q: hammasi xotirada. 100 ta vaziyat scenarios.json faylida."""
-import asyncio, base64, hashlib, hmac, json, os, random, re, time
+import asyncio, difflib, base64, hashlib, hmac, json, os, random, re, time
 import aiohttp
 from aiohttp import web, WSMsgType
 
@@ -145,14 +145,14 @@ async def keys_in(request):
     return web.Response(text=str(len(ks)))
 
 
-async def groq(path, make):
+async def groq(path, make, tag=""):
     keys = groq_keys()
     if not keys:
         raise RuntimeError("Groq kaliti yo'q")
     key_rr[0] = (key_rr[0] + 1) % len(keys)
     keys = keys[key_rr[0]:] + keys[:key_rr[0]]
     now = time.time()
-    live = [k for k in keys if key_cool.get(k, 0) <= now] or keys
+    live = [k for k in keys if key_cool.get((k, tag), 0) <= now and key_cool.get((k, ""), 0) <= now] or keys   # limit modelga qarab: bir model band bo'lsa boshqasi ishlayveradi
     for k in live:
         try:
             async with HTTP.post(GROQ + path, headers={"Authorization": "Bearer " + k}, timeout=aiohttp.ClientTimeout(total=25), **make()) as r:
@@ -164,15 +164,15 @@ async def groq(path, make):
                 else:
                     KEYST[k] = (200, int(time.time()), "")
                 if r.status != 200 and re.search(r"restricted|deactivated|suspended|invalid_api_key", _t, re.I):
-                    key_cool[k] = time.time() + 3600   # cheklangan/o'lik kalit: boshqasiga o'tamiz
+                    key_cool[(k, "")] = time.time() + 3600   # cheklangan/o'lik kalit: boshqasiga o'tamiz
                     continue
                 if r.status == 429:
-                    key_cool[k] = time.time() + 20
+                    key_cool[(k, tag)] = time.time() + 20
                     continue
                 if r.status in (400, 404) and "model" in (await r.text()).lower():
                     raise ModelGone()
                 if r.status in (401, 402, 403):
-                    key_cool[k] = time.time() + 600
+                    key_cool[(k, "")] = time.time() + 600
                     continue
                 if r.status != 200:
                     raise RuntimeError(f"Groq {r.status}: {(await r.text())[:150]}")
@@ -180,7 +180,7 @@ async def groq(path, make):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             KEYST[k] = (0, int(time.time()), "tarmoq: " + repr(e)[:120])
             LAST_ERR[0] = "tarmoq: " + repr(e)[:150]
-            key_cool[k] = time.time() + 10
+            key_cool[(k, tag)] = time.time() + 10
     raise Busy()
 
 
@@ -219,7 +219,7 @@ async def groq_models(path, models, make):
         gone = False
         for m in list(models):
             try:
-                return await groq(path, lambda: make(m))
+                return await groq(path, lambda: make(m), m)
             except ModelGone:
                 gone = True
             except Busy:
@@ -248,33 +248,39 @@ async def stt(raw, ext):
 
 
 JUDGE_SYS = (
-    "Sen rus tili o'rgatuvchi o'yinning hakamisan. Ikki o'quvchi (o'zbeklar) rus tilida rolli suhbat qilyapti. "
-    "Senga vaziyat, o'quvchining roli, oldingi gaplar va uning hozirgi gapi (ovozdan matnga o'girilgan) beriladi.\n"
-    "QOIDALAR:\n"
-    "- ok=false FAQAT shu hollarda: (1) gapda ANIQ grammatik xato bor (so'z shakli, qo'shimcha, jins, kelishik, tuslanish, "
-    "so'z tartibi, noto'g'ri so'z tanlash), yoki (2) gap vaziyatga, rolga yoki oldingi gapga umuman mos kelmaydi "
-    "(mavzudan tashqari, ma'nosiz), yoki (3) gap rus tilida emas.\n"
-    "- Matn ovozdan avtomatik olingan: tinish belgilari, bosh harf, kichik eshitish noaniqliklari, to'ldiruvchi so'zlar "
-    "(э-э, ну) va oddiy og'zaki qisqartmalar xato EMAS. Aniq ishonching komil bo'lmasa ok=true.\n"
-    "- Qisqa tabiiy javoblar («Да», «Нет, спасибо», «До свидания») to'g'ri.\n"
-    "- Sen faqat o'quvchining gapini baholaysan, suhbatdoshning gapini emas.\n"
-    "- fix: ok=false bo'lsa, o'quvchining gapini imkon qadar kam o'zgartirib to'g'rilangan rus gapi; ok=true bo'lsa bo'sh.\n"
-    "- why: ok=false bo'lsa, xatoni o'zbek tilida bitta qisqa gapda tushuntir; ok=true bo'lsa bo'sh.\n"
-    'FAQAT JSON qaytar: {"ok":true,"fix":"","why":""}')
+    "Sen rus tili o'rgatuvchi o'yin hakamisan. O'zbek o'quvchi rolli suhbatda rus tilida gapirdi (matn ovozdan olingan).\n"
+    "ok=true: gap vaziyat va rolga mos mavzuda va tushunarli rus tilida bo'lsa. Kichik grammatik xato, tinish belgisi, "
+    "bosh harf, ovozdan olingan noaniqlik, to'ldiruvchi so'zlar xato EMAS.\n"
+    "ok=false FAQAT: mavzudan tashqari yoki ma'nosiz gap, rus tilida emas, yoki grammatik xato ma'noni buzadigan darajada og'ir.\n"
+    "Shubhada ok=true. Faqat o'quvchi gapini baholaysan, o'zingdan gap qo'shma.\n"
+    'FAQAT JSON: {"ok":true,"fix":"","why":""}. ok=false bo\'lsa: fix = o\'quvchi gapining qisqa to\'g\'rilangani (rus tilida), why = o\'zbekcha bitta qisqa gap.')
+
+
+def local_check(g, i, text):
+    """AI'ga bormasdan (limit sarflamasdan) takror va bema'ni gaplarni to'xtatadi. '' = o'tdi."""
+    norm = re.sub(r"[\W_]+", " ", text.lower().replace("ё", "е")).strip()
+    ws = norm.split()
+    said = g.__dict__.setdefault("said", [[], []])
+    for prev in said[i]:
+        if prev == norm or difflib.SequenceMatcher(None, prev, norm).ratio() >= 0.88:
+            return "Bu gapni allaqachon aytgansiz. Har safar yangi gap ayting."
+    if len(ws) >= 3 and len(set(ws)) * 2 <= len(ws):
+        return "Bir xil so'zni takrorlash gap emas. Mavzuga mos yangi gap ayting."
+    return ""
 
 
 async def judge(g, i, text):
     sc, me, other = g.sc, g.sc["a"] if i == 0 else g.sc["b"], g.sc["b"] if i == 0 else g.sc["a"]
-    ctx = "\n".join(f"{(g.sc['a'] if w == 0 else g.sc['b'])['ru']}: {t}" for w, t in g.log[-4:]) or "(suhbat endi boshlandi)"
+    ctx = "\n".join(f"{(g.sc['a'] if w == 0 else g.sc['b'])['ru']}: {t}" for w, t in g.log[-2:]) or "(suhbat endi boshlandi)"
     user = (f"Vaziyat: {sc['title']} ({sc['place']}). O'quvchining roli: {me['ru']} ({me['uz']}), maqsadi: {me['goal']}. "
             f"Suhbatdosh roli: {other['ru']}.\nOldingi gaplar:\n{ctx}\n\nO'quvchining hozirgi gapi: «{text}»")
     def make(m):
-        body = {"model": m, "temperature": 0, "max_tokens": 1500,   # "o'ylovchi" modellar javobdan oldin ham so'z sarflaydi
+        body = {"model": m, "temperature": 0, "max_tokens": 700,   # "o'ylovchi" modellar javobdan oldin ham so'z sarflaydi
                 "messages": [{"role": "system", "content": JUDGE_SYS}, {"role": "user", "content": user}]}
         if "gpt-oss" in m:
             body["reasoning_effort"] = "low"
         return {"json": body}
-    res = await groq_models("/chat/completions", LLM_MODELS, make)
+    res = await groq_models("/chat/completions", sorted(LLM_MODELS, key=lambda m: 0 if re.search(r"20b|8b|instant", m) else 1), make)   # kichik model avval: limit kam ketadi
     raw = res["choices"][0]["message"].get("content") or ""
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.S)
     try:
@@ -496,7 +502,11 @@ async def run_judge(g, n, i, raw, ext):
             text = await asyncio.wait_for(stt(raw, ext), 25)
             if not text:
                 return await settle(g, i, False, "", "", "Hech narsa eshitilmadi. Balandroq va aniqroq gapiring.", idle=True)
+            rep = local_check(g, i, text)
+            if rep:
+                return await settle(g, i, False, text, "", rep)
             ok, fix, why = await asyncio.wait_for(judge(g, i, text), 25)
+        g.__dict__.setdefault("said", [[], []])[i].append(re.sub(r"[\W_]+", " ", text.lower().replace("ё", "е")).strip())
         g.log.append((i, text))
         await settle(g, i, ok, text, fix, why)
     except asyncio.CancelledError:
