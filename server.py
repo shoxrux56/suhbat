@@ -214,10 +214,10 @@ async def refresh_llm():
     return False
 
 
-async def groq_models(path, models, make):
+async def groq_models(path, models, make, order=None):
     for attempt in range(2):
         gone = False
-        for m in list(models):
+        for m in (sorted(models, key=order) if order else list(models)):
             try:
                 return await groq(path, lambda: make(m), m)
             except ModelGone:
@@ -280,7 +280,7 @@ async def judge(g, i, text):
         if "gpt-oss" in m:
             body["reasoning_effort"] = "low"
         return {"json": body}
-    res = await groq_models("/chat/completions", sorted(LLM_MODELS, key=lambda m: 0 if re.search(r"20b|8b|instant", m) else 1), make)   # kichik model avval: limit kam ketadi
+    res = await groq_models("/chat/completions", LLM_MODELS, make, lambda m: 0 if re.search(r"20b|8b|instant", m) else 1)   # kichik model avval: limit kam ketadi
     raw = res["choices"][0]["message"].get("content") or ""
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.S)
     try:
