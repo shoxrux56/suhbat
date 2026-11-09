@@ -1,306 +1,114 @@
-"""Suhbat + rolli o'yin.
-  • Oddiy suhbat: ikki odam juftlanadi, ovoz ularning o'rtasida to'g'ridan-to'g'ri ketadi (server faqat signal tashiydi).
-  • O'yin: ikkalasi «O'yin» ni bosadi -> rol beriladi -> navbat bilan 20 soniya gapiradi -> AI to'g'ri/xatoni aniqlaydi.
-Baza yo'q: hammasi xotirada. 100 ta vaziyat scenarios.json faylida."""
-import asyncio, difflib, base64, hashlib, hmac, json, os, random, re, time
+"""RuMio — ruscha suhbat sayti (alohida server): odam bilan va sun'iy intellekt ustoz bilan.
+Bot bilan faqat imzolangan havola orqali bog'lanadi (TALK_SECRET). Ovoz serverdan o'tmaydi: odamdan odamga (WebRTC).
+"""
+import asyncio, base64, hashlib, hmac, json, os, re, sqlite3, time
+from datetime import datetime, timedelta, timezone
+
 import aiohttp
 from aiohttp import web, WSMsgType
+from dotenv import load_dotenv
 
-PORT = int(os.getenv("PORT", "8080"))
-HERE = os.path.dirname(os.path.abspath(__file__))
-TURN_SECS = int(os.getenv("TURN_SECS", "20"))      # bitta navbatda gapirish vaqti
-HEARTS = 3                                          # har kimga yurakcha
-MAX_TURNS = int(os.getenv("MAX_TURNS", "12"))       # o'yinda jami navbat (har kimga yarmi)
-GROQ = os.getenv("GROQ_BASE", "https://api.groq.com/openai/v1")
-STT_MODELS = [m for m in os.getenv("STT_MODELS", "whisper-large-v3-turbo,whisper-large-v3").split(",") if m]
-LLM_MODELS = [m for m in os.getenv("LLM_MODELS", "llama-3.3-70b-versatile,llama-3.1-8b-instant").split(",") if m]
-GATE = asyncio.Semaphore(int(os.getenv("GROQ_PARALLEL", "6")))  # bir vaqtda Groq'ga ketadigan so'rovlar (server qotmasin)
-MAX_AUDIO = 700_000
-INVITE_SECS = int(os.getenv("INVITE_SECS", "20"))   # taklifga javob berish vaqti
-DAILY = int(os.getenv("GAMES_PER_DAY", "3"))        # bitta odam kuniga nechta o'yin o'ynay oladi (Groq kalitini tejash uchun)
+load_dotenv()
 SECRET = os.getenv("TALK_SECRET", "").strip()
-TZ_SHIFT = 5 * 3600                                  # Toshkent: kun yarim tunda (00:00) yangilanadi
-USED_FILE = os.path.join(HERE, "games_used.json")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()          # ixtiyoriy: adminga xabar va botga qaytarish uchun
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()]
+ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()           # bloklash havolalari uchun maxfiy kalit
+SITE_URL = os.getenv("SITE_URL", "").rstrip("/")         # admin havolalari uchun, masalan https://suhbat.example.com
+PORT = int(os.getenv("PORT", "8080"))
+DB_PATH = os.getenv("DB_PATH", "suhbat.db")
+FREE_TOTAL = int(os.getenv("HUMAN_FREE_TOTAL", "300"))   # tekin: umrida bir marta shuncha soniya
+UNLIM = 10 ** 7                                          # VIP: odam bilan cheksiz
+MATCH_WAIT = int(os.getenv("MATCH_WAIT", "30"))
+CROSS_AFTER = 12                                         # shu soniyadan keyin boshqa daraja bilan ham juftlanadi
+REPORTS_TO_BAN = 3
+TZ = timezone(timedelta(hours=5))
+if not SECRET:
+    raise SystemExit(".env da TALK_SECRET yo'q (botdagi bilan bir xil bo'lsin)")
+
+if DB_PATH != ":memory:":
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
+db = sqlite3.connect(DB_PATH)
+db.execute("PRAGMA journal_mode=WAL")
+db.execute("PRAGMA synchronous=NORMAL")
+db.execute("PRAGMA busy_timeout=5000")
+db.execute("CREATE TABLE IF NOT EXISTS use(user_id INTEGER, day TEXT, secs INTEGER DEFAULT 0, PRIMARY KEY(user_id, day))")
+db.execute("CREATE TABLE IF NOT EXISTS ai_use(user_id INTEGER, day TEXT, secs INTEGER DEFAULT 0, PRIMARY KEY(user_id, day))")
+db.execute("CREATE TABLE IF NOT EXISTS ban(user_id INTEGER PRIMARY KEY)")
+db.execute("CREATE TABLE IF NOT EXISTS block(a INTEGER, b INTEGER, PRIMARY KEY(a, b))")
+db.execute("CREATE TABLE IF NOT EXISTS report(id INTEGER PRIMARY KEY AUTOINCREMENT, by_id INTEGER, target_id INTEGER, ts INTEGER)")
+db.commit()
 
 
-def day_no():
-    return int((time.time() + TZ_SHIFT) // 86400)
+def today():
+    return datetime.now(TZ).strftime("%Y-%m-%d")
 
 
-try:
-    with open(USED_FILE, encoding="utf-8") as _f:
-        USED = {k: v for k, v in json.load(_f).items() if isinstance(v, list) and len(v) == 2 and v[0] == day_no()}
-except (OSError, ValueError, AttributeError):
-    USED = {}  # key -> [kun, o'ynalgan o'yinlar soni]
+def day_key(vip):
+    return today() if vip else "total"
 
 
-def games_left(key):
-    v = USED.get(key)
-    return DAILY if not v or v[0] != day_no() else max(0, DAILY - v[1])
+def left_for(uid, vip):
+    if vip:
+        return UNLIM
+    cap = FREE_TOTAL
+    r = db.execute("SELECT secs FROM use WHERE user_id=? AND day=?", (uid, day_key(vip))).fetchone()
+    return max(0, cap - (r[0] if r else 0))
 
 
-def use_game(key):
-    v = USED.get(key)
-    USED[key] = [day_no(), (v[1] if v and v[0] == day_no() else 0) + 1]
+def add_use(uid, vip, secs):
+    db.execute("INSERT INTO use(user_id, day, secs) VALUES(?,?,?) ON CONFLICT(user_id, day) DO UPDATE SET secs=secs+?",
+               (uid, day_key(vip), int(secs), int(secs)))
+    db.execute("DELETE FROM use WHERE day != 'total' AND day < ?", ((datetime.now(TZ) - timedelta(days=7)).strftime("%Y-%m-%d"),))
+    db.commit()
+
+
+def banned(uid):
+    return db.execute("SELECT 1 FROM ban WHERE user_id=?", (uid,)).fetchone() is not None
+
+
+def blocked(a, b):
+    return db.execute("SELECT 1 FROM block WHERE (a=? AND b=?) OR (a=? AND b=?)", (a, b, b, a)).fetchone() is not None
+
+
+def verify(token):
+    """Bot bergan imzolangan havola -> {"u","l","v"} yoki None."""
     try:
-        with open(USED_FILE, "w", encoding="utf-8") as f:
-            json.dump(USED, f)
-    except OSError:
-        pass  # diskka yozib bo'lmasa, xotirada qoladi
+        body, sig = (token or "").split(".", 1)
+        good = hmac.new(SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(good, sig):
+            return None
+        d = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+        if d["e"] < time.time():
+            return None
+        return d
+    except Exception:
+        return None
 
 
-def who(tok, dev, ip):
-    """Odamni aniqlaydi: botdan kelgan imzolangan havola (ishonchli) > qurilma raqami > IP."""
-    if SECRET and tok and "." in tok:
-        body, _, sig = tok.rpartition(".")
-        if hmac.compare_digest(sig, hmac.new(SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()):
-            try:
-                info = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
-                if info.get("e", 0) > time.time():
-                    return "u%s" % info["u"]
-            except (ValueError, KeyError, TypeError):
-                pass
-    dev = re.sub(r"\W", "", str(dev or ""))[:40]
-    return ("d" + dev) if dev else ("i" + (ip or "?"))
-
-try:
-    with open(os.path.join(HERE, "scenarios.json"), encoding="utf-8") as f:
-        SCENARIOS = json.load(f)
-except (OSError, ValueError):  # fayl yuklanmagan bo'lsa ham sayt va oddiy suhbat ishlayveradi
-    print("scenarios.json topilmadi: o'yin o'chiq")
-    SCENARIOS = []
-
-
-# ---------------- ICE (ovoz ulanishi) ----------------
-def ice_servers():
-    ice = [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun.cloudflare.com:3478"]}]
-    urls = [u.strip() for u in os.getenv("TURN_URLS", "").split(",") if u.strip()]
-    if urls:
-        ice.append({"urls": urls, "username": os.getenv("TURN_USER", ""), "credential": os.getenv("TURN_PASS", "")})
-    else:  # ochiq sinov TURN (ishlamay qolishi mumkin; barqaror ishlashi uchun o'zingiznikini yozing)
-        ice.append({"urls": ["turn:openrelay.metered.ca:80", "turn:openrelay.metered.ca:443",
-                             "turns:openrelay.metered.ca:443?transport=tcp"],
-                    "username": "openrelayproject", "credential": "openrelayproject"})
-    return ice
-
-
-# ---------------- Groq: ovozdan matn + hakam ----------------
-class Busy(Exception):
-    pass
-
-
-class ModelGone(Exception):
-    pass
-
-
-HTTP = None
-key_cool, key_rr = {}, [0]
-KEYST = {}      # kalit -> (oxirgi HTTP holat, vaqt, qisqa xabar)
-LAST_ERR = [""]
-
-
-PUSHED = []  # bot yuborgan kalitlar (faqat xotirada; bot har 5 daqiqada qayta yuboradi)
-
-
-def groq_keys():
-    ks = (os.getenv("GROQ_API_KEYS", "") + "," + os.getenv("GROQ_API_KEY", "")).split(",") + PUSHED
-    return list(dict.fromkeys(k.strip() for k in ks if k.strip()))
-
-
-async def status(request):
-    """/status — kalitlar holati. /status?test=1 — har bir kalitni Groq'da hoziroq sinaydi (kalitning o'zi ko'rsatilmaydi)."""
-    out = {"groq_kalitlar": len(groq_keys()), "stsenariylar": len(SCENARIOS), "matn_modellari": LLM_MODELS, "ovoz_modellari": STT_MODELS,
-           "oxirgi_xato": LAST_ERR[0]}
-    keys = groq_keys()
-    if request.query.get("test"):
-        res = []
-        for k in keys:
-            item = {"kalit": "…" + k[-4:]}
-            try:
-                async with HTTP.get(GROQ + "/models", headers={"Authorization": "Bearer " + k}, timeout=aiohttp.ClientTimeout(total=15)) as r:
-                    item["holat"] = r.status
-                    item["javob"] = "ok" if r.status == 200 else (await r.text())[:220]
-            except Exception as e:
-                item["holat"] = 0
-                item["javob"] = "tarmoq: " + repr(e)[:150]
-            res.append(item)
-        out["sinov"] = res
-    else:
-        out["kalitlar"] = [{"kalit": "…" + k[-4:], "oxirgi_holat": KEYST.get(k, ("hali ishlatilmagan",))[0],
-                           "xabar": (KEYST.get(k) or ("", 0, ""))[2]} for k in keys]
-    return web.json_response(out, dumps=lambda o: json.dumps(o, ensure_ascii=False))
-
-
-async def keys_in(request):
-    """Bot kalitlarni shu yerga yuboradi: POST /keys, sarlavha X-Secret = TALK_SECRET."""
-    secret = os.getenv("TALK_SECRET", "").strip()
-    if not secret or not hmac.compare_digest(request.headers.get("X-Secret", ""), secret):
-        return web.Response(status=403, text="no")
-    try:
-        d = await request.json()
-    except ValueError:
-        return web.Response(status=400, text="bad")
-    ks = [k for k in (d.get("groq") or []) if isinstance(k, str) and k.startswith("gsk_") and len(k) < 200][:20]
-    PUSHED[:] = ks
-    return web.Response(text=str(len(ks)))
-
-
-async def groq(path, make, tag=""):
-    keys = groq_keys()
-    if not keys:
-        raise RuntimeError("Groq kaliti yo'q")
-    key_rr[0] = (key_rr[0] + 1) % len(keys)
-    keys = keys[key_rr[0]:] + keys[:key_rr[0]]
-    now = time.time()
-    live = [k for k in keys if key_cool.get((k, tag), 0) <= now and key_cool.get((k, ""), 0) <= now] or keys   # limit modelga qarab: bir model band bo'lsa boshqasi ishlayveradi
-    for k in live:
-        try:
-            async with HTTP.post(GROQ + path, headers={"Authorization": "Bearer " + k}, timeout=aiohttp.ClientTimeout(total=25), **make()) as r:
-                _t = ""
-                if r.status != 200:
-                    _t = (await r.text())[:200]
-                    KEYST[k] = (r.status, int(time.time()), _t)
-                    LAST_ERR[0] = f"{path} {r.status}: {_t}"
-                else:
-                    KEYST[k] = (200, int(time.time()), "")
-                if r.status != 200 and re.search(r"restricted|deactivated|suspended|invalid_api_key", _t, re.I):
-                    key_cool[(k, "")] = time.time() + 3600   # cheklangan/o'lik kalit: boshqasiga o'tamiz
-                    continue
-                if r.status == 429:
-                    key_cool[(k, tag)] = time.time() + 20
-                    continue
-                if r.status in (400, 404) and "model" in (await r.text()).lower():
-                    raise ModelGone()
-                if r.status in (401, 402, 403):
-                    key_cool[(k, "")] = time.time() + 600
-                    continue
-                if r.status != 200:
-                    raise RuntimeError(f"Groq {r.status}: {(await r.text())[:150]}")
-                return await r.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            KEYST[k] = (0, int(time.time()), "tarmoq: " + repr(e)[:120])
-            LAST_ERR[0] = "tarmoq: " + repr(e)[:150]
-            key_cool[(k, tag)] = time.time() + 10
-    raise Busy()
-
-
-LLM_REFRESHED = [0]
-
-
-async def refresh_llm():
-    """Groq modellar nomini o'zgartirsa (eskisini o'chirsa), mos matn modelini /models dan o'zi tanlaydi."""
-    if time.time() - LLM_REFRESHED[0] < 600:
-        return False
-    LLM_REFRESHED[0] = time.time()
-    for k in groq_keys():
-        try:
-            async with HTTP.get(GROQ + "/models", headers={"Authorization": "Bearer " + k}, timeout=aiohttp.ClientTimeout(total=15)) as r:
-                if r.status != 200:
-                    continue
-                ids = [m["id"] for m in (await r.json()).get("data", [])]
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
-            continue
-        bad = re.compile(r"whisper|tts|guard|orpheus|embed|distil|vision|compound|safeguard", re.I)
-
-        def score(m):
-            n = re.search(r"(\d+(?:\.\d+)?)b", m.lower())
-            sz = float(n.group(1)) if n else 0
-            return (sz >= 20, "instruct" in m or "versatile" in m or "gpt-oss" in m, sz)
-        pick = sorted([m for m in ids if not bad.search(m)], key=score, reverse=True)[:3]
-        if pick:
-            LLM_MODELS[:] = pick
-            print("LLM modellari yangilandi:", pick)
-            return True
-    return False
-
-
-async def groq_models(path, models, make, order=None):
-    for attempt in range(2):
-        gone = False
-        for m in (sorted(models, key=order) if order else list(models)):
-            try:
-                return await groq(path, lambda: make(m), m)
-            except ModelGone:
-                gone = True
-            except Busy:
-                continue
-        if not (gone and models is LLM_MODELS and await refresh_llm()):
-            break
-    raise Busy()
-
-
-HALLU = re.compile(r"субтитр|продолжение следует|спасибо за просмотр|редактор субтитров|dimatorzok|подписывайтесь", re.I)
-
-
-async def stt(raw, ext):
-    ctype = {"webm": "audio/webm", "mp4": "audio/mp4", "ogg": "audio/ogg"}.get(ext, "audio/webm")
-
-    def make(model):
-        form = aiohttp.FormData()
-        form.add_field("file", raw, filename="a." + ext, content_type=ctype)
-        form.add_field("model", model)
-        form.add_field("language", "ru")
-        form.add_field("temperature", "0")
-        return {"data": form}
-    res = await groq_models("/audio/transcriptions", STT_MODELS, make)
-    t = (res.get("text") or "").strip()
-    return "" if HALLU.search(t) or len(re.sub(r"[\W_]+", "", t)) < 2 else t
-
-
-JUDGE_SYS = (
-    "Sen rus tili o'rgatuvchi o'yin hakamisan. O'zbek o'quvchi rolli suhbatda rus tilida gapirdi (matn ovozdan olingan).\n"
-    "ok=true: gap vaziyat va rolga mos mavzuda va tushunarli rus tilida bo'lsa. Kichik grammatik xato, tinish belgisi, "
-    "bosh harf, ovozdan olingan noaniqlik, to'ldiruvchi so'zlar xato EMAS.\n"
-    "ok=false FAQAT: mavzudan tashqari yoki ma'nosiz gap, rus tilida emas, yoki grammatik xato ma'noni buzadigan darajada og'ir.\n"
-    "Shubhada ok=true. Faqat o'quvchi gapini baholaysan, o'zingdan gap qo'shma.\n"
-    'FAQAT JSON: {"ok":true,"fix":"","why":""}. ok=false bo\'lsa: fix = o\'quvchi gapining qisqa to\'g\'rilangani (rus tilida), why = o\'zbekcha bitta qisqa gap.')
-
-
-def local_check(g, i, text):
-    """AI'ga bormasdan (limit sarflamasdan) takror va bema'ni gaplarni to'xtatadi. '' = o'tdi."""
-    norm = re.sub(r"[\W_]+", " ", text.lower().replace("ё", "е")).strip()
-    ws = norm.split()
-    said = g.__dict__.setdefault("said", [[], []])
-    for prev in said[i]:
-        if prev == norm or difflib.SequenceMatcher(None, prev, norm).ratio() >= 0.88:
-            return "Bu gapni allaqachon aytgansiz. Har safar yangi gap ayting."
-    if len(ws) >= 3 and len(set(ws)) * 2 <= len(ws):
-        return "Bir xil so'zni takrorlash gap emas. Mavzuga mos yangi gap ayting."
-    return ""
-
-
-async def judge(g, i, text):
-    sc, me, other = g.sc, g.sc["a"] if i == 0 else g.sc["b"], g.sc["b"] if i == 0 else g.sc["a"]
-    ctx = "\n".join(f"{(g.sc['a'] if w == 0 else g.sc['b'])['ru']}: {t}" for w, t in g.log[-2:]) or "(suhbat endi boshlandi)"
-    user = (f"Vaziyat: {sc['title']} ({sc['place']}). O'quvchining roli: {me['ru']} ({me['uz']}), maqsadi: {me['goal']}. "
-            f"Suhbatdosh roli: {other['ru']}.\nOldingi gaplar:\n{ctx}\n\nO'quvchining hozirgi gapi: «{text}»")
-    def make(m):
-        body = {"model": m, "temperature": 0, "max_tokens": 700,   # "o'ylovchi" modellar javobdan oldin ham so'z sarflaydi
-                "messages": [{"role": "system", "content": JUDGE_SYS}, {"role": "user", "content": user}]}
-        if "gpt-oss" in m:
-            body["reasoning_effort"] = "low"
-        return {"json": body}
-    res = await groq_models("/chat/completions", LLM_MODELS, make, lambda m: 0 if re.search(r"20b|8b|instant", m) else 1)   # kichik model avval: limit kam ketadi
-    raw = res["choices"][0]["message"].get("content") or ""
-    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.S)
-    try:
-        d = json.loads(raw)
-    except ValueError:
-        m = re.search(r"\{.*\}", raw, re.S)
-        d = json.loads(m.group(0)) if m else {"ok": True}
-    ok = bool(d.get("ok", True))
-    return ok, ("" if ok else str(d.get("fix") or "")[:200]), ("" if ok else str(d.get("why") or "")[:240])
-
-
-# ---------------- ulanishlar va navbatlar ----------------
 class Peer:
-    def __init__(self, ws):
-        self.ws, self.partner, self.game, self.gi, self.ext, self.prop = ws, None, None, 0, "webm", False
-        self.key, self.inv = "i?", None
-        self.relay, self.avoid = False, set()  # relay: ovoz server orqali ketadi (to'g'ridan-to'g'ri ulanmasa); avoid: yaqinda juftlangan odamlar
+    def __init__(self, uid, ws, level, vip):
+        self.uid, self.ws, self.level, self.vip = uid, ws, level, vip
+        self.room = None
+        self.since = 0.0
+        self.left = 0
+        self.connected = False
+        self.qtask = None
 
 
-peers, waiting = set(), []
+class Room:
+    def __init__(self, a, b):
+        self.a, self.b = a, b
+        self.t0 = 0.0
+        self.closed = False
+        self.tasks = []
+
+    def other(self, p):
+        return self.b if p is self.a else self.a
+
+
+queue = []
+active = {}
+recent = {}  # uid -> oxirgi suhbatdoshlar (Keyingisi bosilganda o'sha odam qayta chiqmasin)
 
 
 async def send(p, obj):
@@ -310,365 +118,539 @@ async def send(p, obj):
         pass
 
 
-class Game:
-    def __init__(self, a, b):
-        self.p = [a, b]
-        self.sc = random.choice(SCENARIOS)
-        self.hearts, self.stars, self.ready = [HEARTS, HEARTS], [0, 0], [False, False]
-        self.turn, self.state, self.over, self.log = 0, "ready", False, []
-        self.idle = [0, 0]  # ketma-ket jim qolgan navbatlar
-        self.task = None
-
-    def cancel(self):
-        if self.task and self.task is not asyncio.current_task() and not self.task.done():
-            self.task.cancel()
+def ice_servers():
+    ice = [{"urls": ["stun:stun.l.google.com:19302"]}]
+    turn = [u.strip() for u in os.getenv("TURN_URLS", "").split(",") if u.strip()]
+    if turn:
+        ice.append({"urls": turn, "username": os.getenv("TURN_USER", ""), "credential": os.getenv("TURN_PASS", "")})
+    return ice
 
 
-async def both(g, obj):
-    for p in g.p:
-        await send(p, obj)
-
-
-async def end_game(g, winner, reason):
-    """O'yin tugadi: odamlar suhbatda qoladi (ovoz ulanishi buzilmaydi)."""
-    if g.over:
+async def tg(method, **params):
+    if not BOT_TOKEN:
         return
-    g.over = True
-    g.cancel()
-    await both(g, {"t": "end", "winner": winner, "hearts": g.hearts, "stars": g.stars, "reason": reason})
-    for p in g.p:
-        p.game, p.prop = None, False
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
+            await s.post(f"https://api.telegram.org/bot{BOT_TOKEN}/{method}", json=params)
+    except Exception as e:
+        print("telegram:", e)
 
 
-async def unpair(p):
-    if p in waiting:
-        waiting.remove(p)
-    p.prop = False
-    for x in (p, p.partner):
-        if x and x.inv and x.inv is not asyncio.current_task():
-            x.inv.cancel()
-            x.inv = None
-    g = p.game
-    if g and not g.over:
-        g.over = True
-        g.cancel()
-        for x in g.p:
-            x.game = None
-    q = p.partner
-    p.relay = False
-    if q:
-        p.partner = q.partner = None
-        q.prop = q.relay = False
-        await send(q, {"t": "left"})
+def notify_admins(text):
+    async def go():
+        for aid in ADMIN_IDS:
+            await tg("sendMessage", chat_id=aid, text=text)
+    asyncio.create_task(go())
 
 
-async def quota(p):
-    await send(p, {"t": "quota", "left": games_left(p.key), "max": DAILY})
+def admin_links(uid):
+    if not (SITE_URL and ADMIN_KEY):
+        return f"ID: {uid}"
+    return f"\n🚫 Bloklash: {SITE_URL}/admin/ban?id={uid}&key={ADMIN_KEY}\n✅ Qaytarish: {SITE_URL}/admin/unban?id={uid}&key={ADMIN_KEY}"
 
 
-async def join(p, d=None, ip=""):
-    if d is not None:
-        p.key = who(d.get("tok"), d.get("dev"), ip)
-    await quota(p)
-    await unpair(p)
-    waiting.append(p)
-    await match()
-    if p in waiting:
-        await send(p, {"t": "wait", "n": len(peers)})
+async def leave_queue(p):
+    if p in queue:
+        queue.remove(p)
+    if p.qtask:
+        p.qtask.cancel()
+        p.qtask = None
 
 
-def pick():
-    """Yangi odamni afzal ko'radi: yaqinda gaplashgan juftlikni qayta ulamaydi. Boshqa odam bo'lmasa, o'shalarni ham ulaydi."""
-    w = waiting
-    for i, a in enumerate(w):
-        for b in w[i + 1:]:
-            if id(b) not in a.avoid and id(a) not in b.avoid:
-                return a, b
-    return w[0], w[1]
+async def end_room(room, reason, count=True):
+    if room.closed:
+        return
+    room.closed = True
+    cur = asyncio.current_task()
+    for t in room.tasks:
+        if t is not cur:
+            t.cancel()
+    used = int(time.time() - room.t0) if (room.t0 and count) else 0
+    for p in (room.a, room.b):
+        p.room = None
+        p.connected = False
+        if used > 0 and not p.vip:
+            try:
+                add_use(p.uid, p.vip, used)
+            except sqlite3.Error as e:
+                print("add_use:", e)
+        await send(p, {"type": "ended", "reason": reason, "used": used, "left": left_for(p.uid, p.vip)})
+
+
+async def room_timer(room, secs):
+    await asyncio.sleep(secs)
+    await end_room(room, "time")
+
+
+async def setup_timeout(room):
+    await asyncio.sleep(25)
+    if not room.t0:
+        await end_room(room, "failed", count=False)
+
+
+async def nomatch(p):
+    await asyncio.sleep(MATCH_WAIT)
+    if p in queue:
+        queue.remove(p)
+        await send(p, {"type": "nomatch"})
+        if not groq_keys():
+            await tg("sendMessage", chat_id=p.uid, text="😕 Hozir bo'sh suhbatdosh topilmadi. «🗣 Suhbat» → «🤖 Bot bilan mashq qilish» ni bosing, ustoz bilan gaplashamiz.")
+
+
+def pair_ok(a, b, t, strict):
+    if a.uid == b.uid or blocked(a.uid, b.uid) or b.uid in recent.get(a.uid, ()) or a.uid in recent.get(b.uid, ()):
+        return False
+    if a.level == b.level:
+        return True
+    return (not strict) and t - min(a.since, b.since) >= CROSS_AFTER
 
 
 async def match():
+    t = time.time()
+    for strict in (True, False):
+        i = 0
+        while i < len(queue):
+            a = queue[i]
+            b = next((x for x in queue[i + 1:] if pair_ok(a, x, t, strict)), None)
+            if not b:
+                i += 1
+                continue
+            for x in (a, b):
+                queue.remove(x)
+                if x.qtask:
+                    x.qtask.cancel()
+                    x.qtask = None
+            room = Room(a, b)
+            recent[a.uid] = (recent.get(a.uid, ()) + (b.uid,))[-4:]
+            recent[b.uid] = (recent.get(b.uid, ()) + (a.uid,))[-4:]
+            a.room = b.room = room
+            room.tasks.append(asyncio.create_task(setup_timeout(room)))
+            await send(a, {"type": "matched", "initiator": True, "level": b.level})
+            await send(b, {"type": "matched", "initiator": False, "level": a.level})
+
+
+async def matcher():
     while True:
-        waiting[:] = [x for x in waiting if not x.ws.closed]
-        if len(waiting) < 2:
-            return
-        a, b = pick()
-        waiting.remove(a)
-        waiting.remove(b)
-        a.partner, b.partner = b, a
-        a.avoid.add(id(b)); b.avoid.add(id(a))
-        if len(a.avoid) > 30: a.avoid.clear()
-        if len(b.avoid) > 30: b.avoid.clear()
-        await send(a, {"t": "match", "init": True})
-        await send(b, {"t": "match", "init": False})
+        await asyncio.sleep(2)
+        try:
+            if len(queue) > 1:
+                await match()
+            if len(recent) > 5000:
+                recent.clear()
+        except Exception as e:
+            print("matcher:", e)
 
 
-async def invite_timer(p, q):
-    """Taklifga javob berilmasa (odam jim qolsa yoki ketsa), o'yin 'singan yurakcha' bilan bekor bo'ladi."""
-    try:
-        await asyncio.sleep(INVITE_SECS)
-    except asyncio.CancelledError:
+async def do_report(p, block_only=False):
+    room = p.room
+    if not room:
         return
-    p.inv = None
-    if p.prop and p.partner is q and not p.game:
-        p.prop = False
-        for x in (p, q):
-            await send(x, {"t": "gbreak", "why": "timeout"})
+    q = room.other(p)
+    db.execute("INSERT OR IGNORE INTO block(a, b) VALUES(?,?)", (p.uid, q.uid))
+    if not block_only:
+        db.execute("INSERT INTO report(by_id, target_id, ts) VALUES(?,?,?)", (p.uid, q.uid, int(time.time())))
+        n = db.execute("SELECT COUNT(DISTINCT by_id) FROM report WHERE target_id=? AND ts>?", (q.uid, int(time.time()) - 30 * 86400)).fetchone()[0]
+        if n >= REPORTS_TO_BAN:
+            db.execute("INSERT OR IGNORE INTO ban(user_id) VALUES(?)", (q.uid,))
+            notify_admins(f"🚫 {q.uid} {n} ta shikoyat sabab avtomatik bloklandi." + admin_links(q.uid))
+        else:
+            notify_admins(f"⚠️ Shikoyat: {p.uid} → {q.uid} ({n} ta)." + admin_links(q.uid))
+    db.commit()
+    await end_room(room, "blocked" if block_only else "reported")
 
 
-async def quota_ok(proposer, other):
-    """Ikkalasining ham bugungi o'yin limiti qolganmi? Yo'q bo'lsa, taklif qilgan odamga sababini aytadi."""
-    if games_left(proposer.key) <= 0:
-        await send(proposer, {"t": "noquota", "who": "me", "max": DAILY})
-        return False
-    if games_left(other.key) <= 0:
-        await send(proposer, {"t": "noquota", "who": "other", "max": DAILY})
-        return False
-    return True
+async def cleanup(p):
+    await leave_queue(p)
+    if p.room:
+        await end_room(p.room, "partner")
+    if active.get(p.uid) is p:
+        active.pop(p.uid, None)
 
 
-async def start_game(a, b):
-    """Ikki suhbatdosh o'yinga rozi bo'ldi: ovoz o'sha ulanishda davom etadi, faqat rol beriladi."""
-    if random.random() < 0.5:
-        a, b = b, a
-    g = Game(a, b)
-    a.game, b.game, a.gi, b.gi = g, g, 0, 1
-    a.prop = b.prop = False
-    for x in (a, b):
-        if x.inv:
-            x.inv.cancel()
-            x.inv = None
-    for p, i in ((a, 0), (b, 1)):
-        me, ot = (g.sc["a"], g.sc["b"]) if i == 0 else (g.sc["b"], g.sc["a"])
-        await send(p, {"t": "gstart", "me": i, "secs": TURN_SECS, "hearts": HEARTS, "turns": MAX_TURNS,
-                       "sc": {"em": g.sc["em"], "title": g.sc["title"], "place": g.sc["place"]},
-                       "you": me, "other": {"ru": ot["ru"], "uz": ot["uz"]},
-                       "first": i == 0, "open": g.sc["open"] if i == 0 else ""})
-    g.task = asyncio.create_task(ready_timeout(g))
-
-
-async def ready_timeout(g):
-    try:
-        await asyncio.sleep(45)
-    except asyncio.CancelledError:
-        return
-    if g.state == "ready" and not g.over:
-        g.over = True
-        for x in g.p:
-            x.game = None
-            await send(x, {"t": "gcancel"})
-
-
-# ---------------- o'yin yuragi ----------------
-async def begin_turn(g):
-    if g.over:
-        return
-    if g.turn == 0 and not getattr(g, "counted", False):  # o'yin haqiqatan boshlandi: ikkalasiga ham 1 ta hisoblanadi
-        g.counted = True
-        for x in g.p:
-            use_game(x.key)
-            await quota(x)
-    idx = g.turn % 2
-    g.state = "listen"
-    for p in g.p:
-        await send(p, {"t": "turn", "n": g.turn + 1, "mine": p.gi == idx})
-    g.task = asyncio.create_task(turn_timeout(g, g.turn))
-
-
-async def turn_timeout(g, n):
-    try:
-        await asyncio.sleep(TURN_SECS + 7)  # 7 s: yozib olingan ovoz yuborilishi uchun
-    except asyncio.CancelledError:
-        return
-    if g.turn == n and g.state == "listen" and not g.over:
-        g.state = "judge"
-        await settle(g, n % 2, False, "", "", "Vaqt tugadi: hech narsa aytilmadi.", idle=True)
-
-
-async def on_audio(p, raw):
-    g = p.game
-    if not g or g.over or g.state != "listen" or p.gi != g.turn % 2 or len(raw) > MAX_AUDIO:
-        return
-    g.state = "judge"
-    g.cancel()
-    n, i = g.turn, p.gi
-    await both(g, {"t": "judging"})
-    g.task = asyncio.create_task(run_judge(g, n, i, raw, p.ext))
-
-
-async def run_judge(g, n, i, raw, ext):
-    try:
-        async with GATE:
-            text = await asyncio.wait_for(stt(raw, ext), 25)
-            if not text:
-                return await settle(g, i, False, "", "", "Hech narsa eshitilmadi. Balandroq va aniqroq gapiring.", idle=True)
-            rep = local_check(g, i, text)
-            if rep:
-                return await settle(g, i, False, text, "", rep)
-            ok, fix, why = await asyncio.wait_for(judge(g, i, text), 25)
-        g.__dict__.setdefault("said", [[], []])[i].append(re.sub(r"[\W_]+", " ", text.lower().replace("ё", "е")).strip())
-        g.log.append((i, text))
-        await settle(g, i, ok, text, fix, why)
-    except asyncio.CancelledError:
-        raise
-    except Exception as e:  # AI band / xato: o'yinchi jazolanmaydi
-        print("hakam xatosi:", repr(e), "| kalitlar soni:", len(groq_keys()))
-        why = ("AI kaliti saytda yo'q (bot kalitni hali yubormagan). Bu navbat hisobga olinmadi." if not groq_keys()
-               else "AI hozir band, bu navbat hisobga olinmadi.")
-        await settle(g, i, None, "", "", why)
-
-
-async def settle(g, i, ok, said, fix, why, idle=False):
-    if g.over:
-        return
-    g.idle[i] = g.idle[i] + 1 if idle else 0
-    if ok is True:
-        g.stars[i] += 1
-    elif ok is False:
-        g.hearts[i] -= 1
-    await both(g, {"t": "result", "who": i, "ok": ok, "said": said, "fix": fix, "why": why, "hearts": g.hearts, "stars": g.stars})
-    g.turn += 1
-    if g.hearts[i] <= 0:
-        await asyncio.sleep(3)
-        return await end_game(g, 1 - i, "hearts")
-    if g.idle[i] >= 2:  # ketma-ket 2 marta jim: odam ketib qolgan, o'yin to'xtaydi
-        await asyncio.sleep(3)
-        return await end_game(g, 1 - i, "idle")
-    if g.turn >= MAX_TURNS:
-        await asyncio.sleep(3)
-        w = -1
-        if g.stars[0] != g.stars[1]:
-            w = 0 if g.stars[0] > g.stars[1] else 1
-        elif g.hearts[0] != g.hearts[1]:
-            w = 0 if g.hearts[0] > g.hearts[1] else 1
-        return await end_game(g, w, "turns")
-    g.state = "pause"
-    await asyncio.sleep(5)
-    if not g.over:
-        await begin_turn(g)
-
-
-# ---------------- WebSocket ----------------
 async def ws_handler(request):
-    ws = web.WebSocketResponse(heartbeat=15, max_msg_size=MAX_AUDIO + 1024)
+    ws = web.WebSocketResponse(heartbeat=20, max_msg_size=64 * 1024)
     await ws.prepare(request)
-    p = Peer(ws)
-    peers.add(p)
-    await send(p, {"t": "hello", "ice": ice_servers(), "game": bool(groq_keys() and SCENARIOS), "n": len(peers)})
+    p = None
     try:
         async for msg in ws:
-            if msg.type == WSMsgType.BINARY:
-                d0 = msg.data
-                if d0[:1] == b"\x01":  # jonli ovoz (relay): sherikka o'tkazamiz
-                    if p.relay and p.partner:
-                        try:
-                            await p.partner.ws.send_bytes(d0)
-                        except Exception:
-                            pass
-                elif d0[:1] == b"\x00":  # o'yin: ovoz yozuvi (hakam uchun)
-                    await on_audio(p, d0[1:])
-                continue
             if msg.type != WSMsgType.TEXT:
                 continue
             try:
                 d = json.loads(msg.data)
             except ValueError:
                 continue
-            t = d.get("t")
-            if t == "join":
-                await join(p, d, (request.headers.get("X-Forwarded-For", "") or request.remote or "").split(",")[0].strip())
-            elif t == "leave":
-                await unpair(p)
-            elif t in ("offer", "answer", "ice") and p.partner:
-                await send(p.partner, {"t": t, "d": d.get("d")})
-            elif t == "gprop":  # suhbatdosh o'yinga taklif
-                q = p.partner
-                if not q or p.game or q.game:
+            t = d.get("type")
+            if p is None:
+                if t != "auth":
+                    break
+                info = verify(d.get("token"))
+                if not info:
+                    await ws.send_json({"type": "denied", "text": "Havola eskirgan. Botdagi «🗣 Suhbat» tugmasini qayta bosing."})
+                    break
+                uid = int(info["u"])
+                if banned(uid):
+                    await ws.send_json({"type": "denied", "text": "Siz suhbatdan bloklangansiz."})
+                    break
+                old = active.get(uid)
+                if old:
+                    await send(old, {"type": "denied", "text": "Boshqa oynada ochildi."})
+                    try:
+                        await old.ws.close()
+                    except Exception:
+                        pass
+                    await cleanup(old)
+                p = Peer(uid, ws, str(info.get("l") or "A1"), bool(info.get("v")))
+                active[uid] = p
+                await ws.send_json({"type": "hello", "ice": ice_servers(), "left": left_for(uid, p.vip), "vip": p.vip, "level": p.level, "ai": bool(groq_keys()), "ai_left": ai_left(uid, p.vip)})
+            elif t == "find":
+                if p.room or p in queue:
                     continue
-                if not (groq_keys() and SCENARIOS):
-                    await send(p, {"t": "nogame"})
-                elif not await quota_ok(p, q):
-                    pass
-                elif q.prop:  # u ham taklif qilgan edi: darhol boshlaymiz
-                    await start_game(q, p)
-                else:
-                    p.prop = True
-                    await send(q, {"t": "gprop"})
-                    if p.inv:
-                        p.inv.cancel()
-                    p.inv = asyncio.create_task(invite_timer(p, q))
-            elif t == "gacc" and p.partner and p.partner.prop and not p.game and not p.partner.game:
-                if await quota_ok(p, p.partner):
-                    await start_game(p.partner, p)
-                else:
-                    p.partner.prop = False
-                    if p.partner.inv:
-                        p.partner.inv.cancel()
-                        p.partner.inv = None
-                    await send(p.partner, {"t": "noquota", "who": "other", "max": DAILY})
-            elif t == "gno" and p.partner and p.partner.prop:
-                q = p.partner
-                q.prop = False
-                if q.inv:
-                    q.inv.cancel()
-                    q.inv = None
-                for x in (p, q):
-                    await send(x, {"t": "gbreak", "why": "no"})
-            elif t == "relay" and p.partner and not p.relay:  # to'g'ridan-to'g'ri ulanmadi: ovozni server orqali o'tkazamiz
-                p.relay = p.partner.relay = True
-                await send(p, {"t": "relay"})
-                await send(p.partner, {"t": "relay"})
-            elif t == "rec":
-                p.ext = d.get("ext") if d.get("ext") in ("webm", "mp4", "ogg") else "webm"
-            elif t == "ready" and p.game and p.game.state == "ready" and not p.game.over:
-                g = p.game
-                g.ready[p.gi] = True
-                if all(g.ready):
-                    g.cancel()
-                    await begin_turn(g)
-                else:
-                    await send(g.p[1 - p.gi], {"t": "peer_ready"})
+                p.left = left_for(p.uid, p.vip)
+                if p.left < 20:
+                    await send(p, {"type": "nolimit", "vip": p.vip})
+                    continue
+                p.since = time.time()
+                queue.append(p)
+                p.qtask = asyncio.create_task(nomatch(p))
+                await send(p, {"type": "searching", "wait": MATCH_WAIT})
+                await match()
+            elif t == "cancel":
+                await leave_queue(p)
+                await send(p, {"type": "idle", "left": left_for(p.uid, p.vip)})
+            elif t == "signal" and p.room and not p.room.closed:
+                await send(p.room.other(p), {"type": "signal", "data": d.get("data")})
+            elif t == "connected" and p.room and not p.room.closed:
+                p.connected = True
+                room = p.room
+                if room.a.connected and room.b.connected and not room.t0:
+                    room.t0 = time.time()
+                    secs = max(10, min(room.a.left, room.b.left))
+                    unlimited = secs >= UNLIM
+                    if not unlimited:
+                        room.tasks.append(asyncio.create_task(room_timer(room, secs)))
+                    for x in (room.a, room.b):
+                        await send(x, {"type": "started", "secs": 0 if unlimited else secs})
+            elif t == "failed" and p.room:
+                await end_room(p.room, "failed", count=False)
+            elif t in ("hangup", "next") and p.room:
+                await end_room(p.room, "hangup")
+            elif t == "report":
+                await do_report(p)
+            elif t == "block":
+                await do_report(p, block_only=True)
     except Exception as e:
         print("ws xato:", e)
     finally:
-        peers.discard(p)
-        await unpair(p)
+        if p:
+            await cleanup(p)
     return ws
 
 
-async def online_loop():
-    while True:
-        await asyncio.sleep(4)
-        n = len(peers)
-        for p in list(peers):
-            await send(p, {"t": "online", "n": n})
+# ---------------- sun'iy intellekt ustoz (odam topilmasa yoki xohlasa): Groq + edge-tts ----------------
+AI_DAILY = int(os.getenv("AI_DAILY", "300"))  # kuniga necha soniya
+RU_VOICE = os.getenv("TALK_RU_VOICE", "ru-RU-SvetlanaNeural")
+STT_MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"]
+LLM_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+GROQ = "https://api.groq.com/openai/v1"
+ai_sessions = {}
+ai_gate = asyncio.Semaphore(12)
+key_bad = {}
+key_rr = [0]
+key_told = {}
+
+
+class Busy(Exception):
+    pass
+
+
+def groq_keys():
+    """Kalitlar: .env (GROQ_API_KEYS) + botning keys.json fayli (bot admin panelidan qo'shilgan; bir kompyuterda bo'lsa o'zi topadi)."""
+    ks = [k.strip() for k in (os.getenv("GROQ_API_KEYS", "") + "," + os.getenv("GROQ_API_KEY", "")).split(",") if k.strip()]
+    for path in (os.getenv("KEYS_PATH", ""), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bot", "keys.json")):
+        if path and os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    v = json.load(f).get("groq")
+                ks += [v] if isinstance(v, str) else list(v or [])
+            except (OSError, ValueError, AttributeError):
+                pass
+            break
+    return list(dict.fromkeys(k for k in ks if isinstance(k, str) and k))
+
+
+AI_FREE_TOTAL = int(os.getenv("AI_FREE_TOTAL", "120"))  # VIP bo'lmaganga: umrida bir marta shuncha soniya AI suhbat
+
+
+def ai_left(uid, vip=False):
+    """VIP: kuniga AI_DAILY soniya. VIP emas: butun umri uchun bir martalik AI_FREE_TOTAL soniya."""
+    r = db.execute("SELECT secs FROM ai_use WHERE user_id=? AND day=?", (uid, today() if vip else "total")).fetchone()
+    return max(0, (AI_DAILY if vip else AI_FREE_TOTAL) - (r[0] if r else 0))
+
+
+def ai_add(uid, secs, vip=False):
+    day = today() if vip else "total"
+    db.execute("INSERT INTO ai_use(user_id, day, secs) VALUES(?,?,?) ON CONFLICT(user_id, day) DO UPDATE SET secs=secs+?",
+               (uid, day, int(secs), int(secs)))
+    db.execute("DELETE FROM ai_use WHERE day != 'total' AND day < ?", ((datetime.now(TZ) - timedelta(days=7)).strftime("%Y-%m-%d"),))
+    db.commit()
+
+
+TALK_RULES = {
+    "A0": ("Foydalanuvchi rus tilini noldan o'rganyapti. Faqat eng oddiy so'z va 2-3 so'zli iboralar bilan so'ra (salomlashish, tanishuv, raqamlar).", 1),
+    "A1": ("Faqat juda oddiy 3-5 so'zli savol ber, hozirgi zamonda (ism, oila, kun tartibi).", 1),
+    "A2": ("Oddiy savol ber; o'tgan va kelasi zamonga ham o'tishing mumkin (xarid, yo'l, ovqat).", 1),
+    "B1": ("Tabiiy, tushunarli savol ber: fikr va sabab so'ra ('почему').", 1),
+    "B2": ("Erkin, boyroq tilda savol ber, fikrini asoslashni talab qil.", 2),
+    "C1": ("Tabiiy tezlikda, murakkab tuzilma va iboralar bilan savol ber.", 2),
+}
+TALK_HELLO = {
+    "A0": ("Привет! Меня зовут Анна. Как тебя зовут?", "Salom! Mening ismim Anna. Sizning ismingiz nima?"),
+    "A1": ("Привет! Как тебя зовут?", "Salom! Ismingiz nima?"),
+    "A2": ("Привет! Что ты делал сегодня?", "Salom! Bugun nima qildingiz?"),
+    "B1": ("Привет! Расскажи, чем ты занимаешься?", "Salom! Nima bilan shug'ullanasiz, ayting."),
+    "B2": ("Здравствуйте! Расскажите о вашей работе или учёбе.", "Assalomu alaykum! Ishingiz yoki o'qishingiz haqida gapirib bering."),
+    "C1": ("Здравствуйте! Давайте поговорим о том, что вас волнует в последнее время.", "Assalomu alaykum! Oxirgi paytlarda sizni nima tashvishlantirayotgani haqida gaplashamiz."),
+}
+HELLO_TOPIC = ("Привет! Что ты узнал на уроке сегодня? Расскажи.", "Salom! Bugun darsda nimani bildingiz? Aytib bering.")
+
+
+def ai_prompt(level, goal, topic):
+    rule, n = TALK_RULES.get(level, TALK_RULES["A1"])
+    t = (f"BUGUNGI DARS MAVZUSI: {topic}. Savollaringni shu mavzu bo'yicha ber va o'quvchi nimani tushunganini tekshir.\n" if topic else "")
+    return (f"Sen rus tili ustozisan. O'quvchi o'zbek, ovozli xabar yuboryapti (matn ovozdan avtomatik olingan: tinish belgilari "
+            f"va kichik noaniqliklarni xato deb hisoblama). Daraja: {level}. O'quvchining maqsadi: {goal or 'umumiy'}.\n"
+            f"{t}{rule}\n\nJAVOB FORMATI (qat'iy, aynan shu uch qator):\n"
+            f"RU: <rus tilida FAQAT SAVOL ({n} gap). Tushuntirma, izoh, tarjima yozma>\n"
+            "TR: <RU qatordagi savolning o'zbekcha tarjimasi>\n"
+            "UZ: <o'quvchi xato qilgan bo'lsa FAQAT BITTA qisqa o'zbekcha gap: «Siz: ... → To'g'risi: ...». Xato bo'lmasa faqat: ->\n\n"
+            "Javob juda qisqa bo'lsin. Faqat rus tili mashqi haqida gapir; boshqa mavzu so'ralsa, muloyim rad etib savolga qayt. "
+            "Belgilar, emoji va markdown ishlatma.")
+
+
+def ai_parse(text):
+    ru = re.search(r"RU:\s*(.+?)(?=\n\s*(?:TR|UZ):|\Z)", text, re.S)
+    tr = re.search(r"TR:\s*(.+?)(?=\n\s*UZ:|\Z)", text, re.S)
+    uz = re.search(r"UZ:\s*(.+)", text, re.S)
+    ru = ru.group(1).strip() if ru else ""
+    tr = tr.group(1).strip() if tr else ""
+    uz = uz.group(1).strip() if uz else ""
+    if uz in ("-", "—", "–"):
+        uz = ""
+    if not ru and not uz:
+        ru = text.strip()
+    return ru, uz, tr
+
+
+async def groq_call(http, path, make):
+    """Kalitlarni navbat bilan sinaydi. 429 bo'lsa kalit almashtirilmaydi (Busy)."""
+    keys = groq_keys()
+    if not keys:
+        raise RuntimeError("Groq kaliti yo'q")
+    key_rr[0] = (key_rr[0] + 1) % len(keys)
+    keys = keys[key_rr[0]:] + keys[:key_rr[0]]
+    live = [k for k in keys if time.time() - key_bad.get(k, 0) > 120] or keys
+    last = "?"
+    for k in live:
+        opts = make()
+        try:
+            async with http.post(GROQ + path, headers={"Authorization": "Bearer " + k}, timeout=aiohttp.ClientTimeout(total=45), **opts) as r:
+                if r.status == 429:
+                    raise Busy()
+                if r.status in (401, 402, 403) or r.status >= 500:
+                    last = f"HTTP {r.status}"
+                    key_bad[k] = time.time()
+                    if time.time() - key_told.get(k, 0) > 3600:
+                        key_told[k] = time.time()
+                        notify_admins(f"⚠️ Groq kaliti (…{k[-4:]}) ishlamayapti: {last}")
+                    continue
+                if r.status != 200:
+                    raise RuntimeError(f"Groq {r.status}: {(await r.text())[:200]}")
+                key_bad.pop(k, None)
+                return await r.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            last = type(e).__name__
+            key_bad[k] = time.time()
+    raise RuntimeError("Hamma Groq kalitlari ishlamadi: " + last)
+
+
+async def groq_models(http, path, models, make):
+    for i, m in enumerate(models):
+        try:
+            return await groq_call(http, path, lambda: make(m))
+        except Busy:
+            if i == len(models) - 1:
+                raise
+
+
+async def ai_stt(raw, ctype, level):
+    ext = "webm" if "webm" in ctype else "m4a" if ("mp4" in ctype or "aac" in ctype) else "ogg" if "ogg" in ctype else "wav" if "wav" in ctype else "webm"
+
+    def make(model):
+        form = aiohttp.FormData()
+        form.add_field("file", raw, filename="a." + ext, content_type=ctype or "audio/webm")
+        form.add_field("model", model)
+        form.add_field("temperature", "0")
+        if level != "A0":
+            form.add_field("language", "ru")
+        return {"data": form}
+    async with aiohttp.ClientSession() as http:
+        return ((await groq_models(http, "/audio/transcriptions", STT_MODELS, make)).get("text") or "").strip()
+
+
+async def ai_llm(msgs, level):
+    models = LLM_MODELS[::-1] if level in ("A0", "A1", "A2") else LLM_MODELS
+    async with aiohttp.ClientSession() as http:
+        res = await groq_models(http, "/chat/completions", models,
+                                lambda m: {"json": {"model": m, "messages": msgs, "temperature": 0.5, "max_tokens": 130}})
+    return res["choices"][0]["message"]["content"]
+
+
+async def ai_tts(text, level):
+    import edge_tts
+    out = b""
+    async for ch in edge_tts.Communicate(text, RU_VOICE, rate="-15%" if level in ("A0", "A1") else "+0%").stream():
+        if ch["type"] == "audio":
+            out += ch["data"]
+    if not out:
+        raise RuntimeError("TTS bo'sh")
+    return out
+
+
+def ai_session(info):
+    t = time.time()
+    for k in [k for k, v in ai_sessions.items() if t - v["ts"] > 3 * 3600]:
+        ai_sessions.pop(k, None)
+    uid = int(info["u"])
+    ses = ai_sessions.get(uid)
+    if not ses:
+        ses = ai_sessions[uid] = {"hist": [], "level": str(info.get("l") or "A1"), "goal": info.get("g") or "", "topic": info.get("p") or "", "ts": t}
+    ses["ts"] = t
+    return ses
+
+
+async def ai_start(request):
+    try:
+        info = verify((await request.json()).get("token"))
+    except Exception:
+        info = None
+    if not info or banned(int(info["u"])):
+        return web.json_response({"error": "Havola eskirgan yoki ruxsat yo'q."}, status=403)
+    if not groq_keys():
+        return web.json_response({"error": "Ustoz hozir vaqtincha ishlamayapti."}, status=503)
+    uid = int(info["u"])
+    ai_sessions.pop(uid, None)
+    ses = ai_session(info)
+    ru, tr = (HELLO_TOPIC if ses["topic"] and ses["level"] != "A0" else TALK_HELLO.get(ses["level"], TALK_HELLO["A1"]))
+    ses["hist"].append({"role": "assistant", "content": "RU: " + ru})
+    try:
+        audio = await ai_tts(ru, ses["level"])
+    except Exception as e:
+        print("TTS:", e)
+        audio = b""
+    return web.json_response({"ru": ru, "tr": tr, "audio": base64.b64encode(audio).decode(), "left": ai_left(uid, bool(info.get("v")))})
+
+
+async def ai_turn(request):
+    info = verify(request.headers.get("X-Token"))
+    if not info or banned(int(info["u"])):
+        return web.json_response({"error": "Havola eskirgan yoki ruxsat yo'q."}, status=403)
+    uid = int(info["u"])
+    vip = bool(info.get("v"))
+    if ai_left(uid, vip) <= 0:
+        return web.json_response({"done": True, "left": 0, "vip_needed": not vip})
+    raw = await request.read()
+    if not raw or len(raw) < 800:
+        return web.json_response({"error": "Ovoz juda qisqa. Qayta urinib ko'ring."}, status=400)
+    try:
+        dur = max(1, min(30, int(float(request.headers.get("X-Dur", "5")))))
+    except ValueError:
+        dur = 5
+    ses = ai_session(info)
+    try:
+        async with ai_gate:
+            heard = await ai_stt(raw, request.headers.get("Content-Type", ""), ses["level"])
+            if not heard:
+                return web.json_response({"error": "Ovozni eshita olmadim. Aniqroq gapiring."}, status=422)
+            ses["hist"] = ses["hist"][-4:] + [{"role": "user", "content": heard}]
+            msgs = [{"role": "system", "content": ai_prompt(ses["level"], ses["goal"], ses["topic"])}] + ses["hist"]
+            reply = await ai_llm(msgs, ses["level"])
+            ru, uz, tr = ai_parse(reply)
+            ses["hist"].append({"role": "assistant", "content": "RU: " + ru})
+            audio = await ai_tts(ru, ses["level"]) if ru else b""
+    except Busy:
+        return web.json_response({"error": "Ustoz hozir band. Bir oz kutib, qayta urinib ko'ring."}, status=429)
+    except Exception as e:
+        print("AI xato:", type(e).__name__, str(e)[:200])
+        return web.json_response({"error": "Xatolik bo'ldi, vaqtingizdan hisoblanmadi. Qayta urinib ko'ring."}, status=500)
+    ai_add(uid, dur + min(20, len(ru) // 14 + 2), vip)
+    left = ai_left(uid, vip)
+    return web.json_response({"heard": heard, "ru": ru, "uz": uz, "tr": tr, "audio": base64.b64encode(audio).decode(), "left": left, "done": left <= 0})
+
+
+async def ai_end(request):
+    try:
+        info = verify((await request.json()).get("token"))
+    except Exception:
+        info = None
+    if info:
+        ai_sessions.pop(int(info["u"]), None)
+    return web.json_response({"ok": True})
+
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 async def page(request):
-    return web.FileResponse(os.path.join(HERE, "index.html"), headers={"Cache-Control": "no-cache"})
+    return web.FileResponse(os.path.join(HERE, "index.html"), headers={"Cache-Control": "no-store"})
 
 
-async def on_start(app):
-    global HTTP
-    HTTP = aiohttp.ClientSession()
-    app["loop"] = asyncio.create_task(online_loop())
+async def admin(request):
+    if not ADMIN_KEY or not hmac.compare_digest(request.query.get("key", ""), ADMIN_KEY):
+        return web.Response(status=403, text="403")
+    uid = request.query.get("id", "")
+    if not uid.isdigit():
+        return web.Response(status=400, text="id kerak")
+    uid = int(uid)
+    if request.path.endswith("unban"):
+        db.execute("DELETE FROM ban WHERE user_id=?", (uid,))
+        db.execute("DELETE FROM report WHERE target_id=?", (uid,))
+        db.commit()
+        return web.Response(text=f"✅ {uid} qaytarildi")
+    db.execute("INSERT OR IGNORE INTO ban(user_id) VALUES(?)", (uid,))
+    db.commit()
+    p = active.get(uid)
+    if p and p.room:
+        await end_room(p.room, "banned")
+    return web.Response(text=f"🚫 {uid} bloklandi")
 
 
-async def on_stop(app):
-    await HTTP.close()
+async def stats(request):
+    if not ADMIN_KEY or not hmac.compare_digest(request.query.get("key", ""), ADMIN_KEY):
+        return web.Response(status=403, text="403")
+    return web.json_response({"online": len(active), "waiting": len(queue), "talking": sum(1 for p in active.values() if p.room)})
 
 
 def make_app():
-    app = web.Application()
+    app = web.Application(client_max_size=4 * 1024 * 1024)
+    app.router.add_post("/ai/start", ai_start)
+    app.router.add_post("/ai/turn", ai_turn)
+    app.router.add_post("/ai/end", ai_end)
     app.router.add_get("/", page)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
-    app.router.add_get("/status", status)
-    app.router.add_post("/keys", keys_in)
-    app.on_startup.append(on_start)
-    app.on_cleanup.append(on_stop)
+    app.router.add_get("/admin/ban", admin)
+    app.router.add_get("/admin/unban", admin)
+    app.router.add_get("/admin/stats", stats)
     return app
 
 
+async def main():
+    runner = web.AppRunner(make_app())
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", PORT).start()
+    print(f"Suhbat sayti ishlayapti: port {PORT}")
+    await matcher()
+
+
 if __name__ == "__main__":
-    web.run_app(make_app(), host="0.0.0.0", port=PORT)
+    asyncio.run(main())
