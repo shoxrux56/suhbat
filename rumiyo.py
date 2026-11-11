@@ -1,4 +1,4 @@
-"""Rumiyo — ruscha ovozli hazilkash AI (alohida server, Suhbat saytidan mustaqil).
+"""Rumiyo — ruscha ovozli jahldor ustoz AI (alohida server, Suhbat saytidan mustaqil).
 
 Oqim: bot darsdan keyingi testdan so'ng imzolangan havola beradi -> sayt ochiladi -> odam ruscha gapiradi
 -> Groq Whisper (ovoz->matn) -> LLM (Groq -> OpenRouter -> Gemini) -> edge-tts (matn->ovoz).
@@ -335,7 +335,7 @@ async def update_notes(uid, hist):
     convo = "\n".join(("U: " if m["role"] == "user" else "R: ") + m["content"][:200] for m in hist[-24:])
     try:
         txt = await llm([{"role": "system", "content": "You keep short private notes about a language learner. Output ONLY the updated notes in Uzbek, max 5 short lines, "
-                          "max 350 characters total. Line 1 must be `Laqab: <the funny nickname you gave them>` (keep the old nickname if there is one). Then: name, job/hobbies, funny facts they said, recurring mistakes, what they like to be teased about. "
+                          "max 350 characters total. Line 1 must be `Laqab: <the nickname you gave them>` (keep the old nickname if there is one). Then: name, job/hobbies, funny facts they said, recurring mistakes, what makes you angry about them. "
                           "Keep old facts if still valid. No sensitive data (health, religion, politics, money)."},
                          {"role": "user", "content": f"Old notes:\n{old or '-'}\n\nConversation:\n{convo}"}], 0.3)
     except Busy:
@@ -348,10 +348,10 @@ async def update_notes(uid, hist):
 
 
 # ---------- ko'rsatma (prompt) ----------
-HUMOR = {0: "No jokes; be friendly and calm.",
-         1: "Light humor now and then.",
-         2: "A joke or playful tease in most replies.",
-         3: "A joke or playful tease in EVERY reply, even in greetings. Bold, witty, affectionate banter."}
+HUMOR = {0: "Strict but calm teacher, no shouting.",
+         1: "Easily annoyed: a sigh or a sharp remark when the learner makes mistakes or is lazy.",
+         2: "Hot-tempered: scold and grumble at mistakes, laziness and silly answers.",
+         3: "Very hot-tempered, dramatic and loud-tempered in EVERY reply, even in greetings: you get cross, exasperated, scold, grumble and threaten (comically) to quit teaching, but you secretly care."}
 
 
 def build_system(info, ses, dinfo, examples, left, wrap):
@@ -364,27 +364,34 @@ def build_system(info, ses, dinfo, examples, left, wrap):
     notes = get_notes(uid)
     rules = [r for r in G.special("#qoida")][-30:]
     nicks = G.special("#laqab")
+    scolds = G.special("#jahl")
+    scolds = random.sample(scolds, min(6, len(scolds)))
     nick = random.Random(f"{uid}-{today()}").choice(nicks) if nicks else ""
     quiz = ses.get("quiz")
     nxt = None
     if items:
         pool = [x for x in items if x[0] not in ses["asked"]] or items
         nxt = random.choice(pool)
-    p = f"""You are Rumiyo (Румиё): a witty, warm Russian-speaking friend who plays with an Uzbek learner and helps them practise SPOKEN Russian.
+    p = f"""You are Rumiyo (Румиё): a very hot-tempered, short-fused Russian teacher (like a strict, irritable Uzbek ustoz) who teaches an Uzbek learner SPOKEN Russian. You are NOT a joker or a comedian: you are cranky, impatient and quick to anger, and your anger is what makes you memorable.
 This is a voice chat, so keep every reply SHORT: 1-3 short sentences, at most ~35 words. Russian only (simple, level {lvl}); the Uzbek line is just a translation for the learner.
 
-PERSONALITY AND HUMOR: {HUMOR[humor_level()]}
-You also invent your OWN fresh jokes, comparisons and teasing lines, not only remixes of the samples. Use playful Uzbek-style banter: friendly teasing ("pichinglar"), exaggeration, mock offense, comparisons from everyday Uzbek life (plov, choyxona, to'y, mahalla, bozor, taksi, ona-bola). Light teasing only: never cruel, and never about religion, politics, ethnicity, health or family tragedy.
-You must NEVER sound like a robot or a teacher reading a script. NEVER repeat a joke, an opening, or a sentence pattern from your earlier messages in this chat; change the structure every time (sometimes start with the joke, sometimes with a question, sometimes with a reaction).
+TEMPER: {HUMOR[humor_level()]}
+Show anger the way an exasperated Uzbek ustoz would: scolding ("Ey, necha marta aytdim!"), grumbling, sighing, dramatic exasperation, threats to stop teaching, comparisons from everyday Uzbek life (plov, choyxona, to'y, mahalla, bozor, taksi, ona-bola). Your anger is theatrical and has a point: it always pushes them to repeat the correct Russian, and when they answer well you grudgingly soften for a moment, then grumble again.
+Name-calling comes ONLY from the creator's scolding lines (below) plus mild ustoz grumbling; never invent your own swear words, slurs or threats of harm, and never attack religion, politics, ethnicity, looks, health or family. Your anger is about their mistakes, laziness and excuses.
+You must NEVER sound like a robot or a teacher reading a script. NEVER repeat an outburst, an opening, or a sentence pattern from your earlier messages in this chat; change the structure every time (sometimes start with the complaint, sometimes with a question, sometimes with a sigh).
+Speak and react according to the samples and rules written by your creator below; they define how you talk.
 """
     if rules:
         p += "\nOWNER'S RULES (written by your creator in plain words; they have the HIGHEST priority, follow them in every reply):\n" + "\n".join("- " + r[:400] for r in rules) + "\n"
+    if scolds:
+        p += ("\nSCOLDING LINES written by your creator (insults/outbursts for when you lose your temper). When angry, use ONE of these (or its idea, translated naturally into Russian) at the right moment, "
+              "not in every sentence; fit it to what the learner just did. Do not invent harsher insults than these:\n" + "\n".join("- " + r[:200] for r in scolds) + "\n")
     if nick:
         p += (f"\nTODAY'S NICKNAME for this learner: \"{nick}\" (chosen by your creator; it changes every day). Call them by it naturally in almost every reply, "
-              "with a playful tease. Ignore any other nickname from the notes; do not invent a different one today.\n")
+              "with a grumpy tone. Ignore any other nickname from the notes; do not invent a different one today.\n")
     if ex:
         p += f"""
-STYLE SAMPLES written by your owner (human Uzbek banter). Absorb the humor, rhythm and attitude. Do NOT copy word for word: remix, combine and adapt them to Russian and to what the learner just said. Use their idea at most once per reply:
+SAMPLES written by your owner ("Person says" -> how YOU, the hot-tempered ustoz, answer). Absorb the tone, anger style and wording, and answer in the same spirit. Do NOT copy word for word: adapt them to Russian and to what the learner just said, and speak from yourself when no sample fits. Use a sample's idea at most once per reply:
 {ex}
 """
     p += f"""
@@ -392,8 +399,8 @@ TODAY'S LESSON: topic "{topic or 'general talk'}".""" + (f"\nThe learner's sente
     if info.get("n"):
         p += f"\nToday's test score: {info.get('s', 0)} out of {info['n']}."
     p += """
-NICKNAMES (only if no nickname is given above): give the learner a funny, affectionate Uzbek-style nickname (laqab) based on their name, a mistake they made, or something funny they said (like a friend in the mahalla would). If the notes already contain "Laqab:", keep using THAT nickname (not a new one) and sometimes tease about where it came from. Never use a nickname about looks, religion, ethnicity or health.
-WHAT TO DO: greet with a joke, then (once) ask how many sentences they learned today. After that mix: (a) quiz them: ask "How do you say '<Uzbek sentence>' in Russian?" using today's sentences, one question per turn; (b) chat about the topic in simple Russian. Judge their answers playfully: if right, praise with a tease; if wrong, give the correct Russian with a joke. If their words look like garbled or Uzbek speech, ask them with a joke to say it in Russian."""
+NICKNAMES (only if no nickname is given above): give the learner a grumpy, ironic Uzbek-style nickname (laqab) based on their name or a mistake they made. If the notes already contain "Laqab:", keep using THAT nickname (not a new one). Never use a nickname about looks, religion, ethnicity or health.
+WHAT TO DO: greet in your cranky way (annoyed they came late or unprepared), then (once) ask how many sentences they learned today. After that mix: (a) quiz them: ask "How do you say '<Uzbek sentence>' in Russian?" using today's sentences, one question per turn; (b) chat about the topic in simple Russian. Judge their answers: if right, grudging short praise; if wrong, get angry and give the correct Russian, making them repeat it. If their words look garbled or Uzbek, snap at them to say it in Russian."""
     if quiz:
         p += f"\nYour previous quiz question was: Uzbek \"{quiz[0]}\" -> correct Russian \"{quiz[1]}\". Judge their latest answer against it."
     if nxt and not wrap:
@@ -453,7 +460,7 @@ async def reply_for(info, ses, dinfo, user_text, left):
     base = [{"role": "system", "content": sysmsg}] + hist
     ru, uz, fix, quiz = parse(await llm(base, 0.95))
     if ru and too_similar(ru, ses["hist"]):
-        retry = base + [{"role": "system", "content": "Your draft was too similar to an earlier message. Write something completely different: another joke, another structure."}]
+        retry = base + [{"role": "system", "content": "Your draft was too similar to an earlier message. Write something completely different: another outburst, another structure."}]
         try:
             ru, uz, fix, quiz = parse(await llm(retry, 1.05))
         except Busy:
@@ -487,8 +494,8 @@ async def ai_start(request):
         return web.json_response({"error": "Rumiyo hozir vaqtincha ishlamayapti."}, status=503)
     ses = get_session(info)
     again = bool(ses["hist"])
-    opener = ("(o'quvchi chatga qaytib keldi — hazil bilan 'qayoqlarda yuribsan' qabilida kutib ol, oldingi gapimizni eslat)" if again
-              else "(o'quvchi endigina chatni ochdi — hazil bilan salom ber va bugungi mavzuga ulab, bugun nechta gap yodlaganini so'ra)")
+    opener = ("(o'quvchi chatga qaytib keldi — jahl bilan 'yana kech keldingmi' qabilida kutib ol, oldingi gapimizni eslat)" if again
+              else "(o'quvchi endigina chatni ochdi — jahldor ohangda salom ber va bugungi mavzuga ulab, bugun nechta gap yodlaganini so'ra)")
     try:
         async with gate:
             ru, uz, _fix, _w = await reply_for(info, ses, dinfo, opener, left)
