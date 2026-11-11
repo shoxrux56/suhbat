@@ -38,6 +38,9 @@ h2{font-size:1.15rem}
 .btn{display:inline-block;border:0;border-radius:14px;padding:13px 22px;font:inherit;font-weight:600;background:var(--acc);color:#fff;text-decoration:none;cursor:pointer}
 .link{background:none;border:0;color:var(--mut);font:inherit;text-decoration:underline;cursor:pointer;padding:6px}
 .emoji{font-size:3rem}
+.av{width:min(46vw,210px);aspect-ratio:1;margin:0 auto;border-radius:26px;overflow:hidden;background:#2a0d12;flex:none;box-shadow:0 6px 24px rgba(0,0,0,.25);transition:box-shadow .3s}
+.av video{width:100%;height:100%;object-fit:cover;display:block}
+body.angry .av{box-shadow:0 0 44px rgba(255,40,40,.6)}
 </style>
 </head>
 <body>
@@ -46,7 +49,7 @@ h2{font-size:1.15rem}
 
 <section id="s-hello" class="scr hide">
   <div class="mid">
-    <div class="emoji">😄</div>
+    <div class="av" id="av-h"><video muted playsinline loop autoplay preload="auto" src="media/idle.mp4" onerror="document.getElementById('av-h').hidden=true"></video></div>
     <h1>Rumiyo bilan gaplashamiz</h1>
     <p class="lead" id="h-topic">Bugungi darsni ruscha gaplashib mustahkamlaymiz. Mikrofonga ruxsat bering.</p>
     <button id="b-go" class="orb big" aria-label="Boshlash"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
@@ -55,7 +58,8 @@ h2{font-size:1.15rem}
 </section>
 
 <section id="s-chat" class="scr hide">
-  <div class="bar"><div><h2>Rumiyo 😄</h2><div class="topic" id="c-topic"></div></div><span class="chip">Qoldi <b id="left">--:--</b></span></div>
+  <div class="bar"><div><h2>Rumiyo</h2><div class="topic" id="c-topic"></div></div><span class="chip">Qoldi <b id="left">--:--</b></span></div>
+  <div class="av" id="av"><video id="av-v" muted playsinline loop preload="auto"></video></div>
   <div id="log" class="log"></div>
   <div class="dock">
     <button id="b-mic" class="orb" aria-label="Gapirish"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
@@ -90,9 +94,9 @@ h2{font-size:1.15rem}
     if (sub) { var s = document.createElement("small"); s.textContent = sub; d.appendChild(s); }
     $("log").appendChild(d); $("log").scrollTop = 1e9;
   }
-  function play(b64) {
+  function play(b64, txt) {
     return new Promise(function (res) {
-      if (!b64) return res();
+      if (!b64) return setTimeout(res, Math.min(6000, 1200 + (txt || "").length * 60));   // ovoz bo'lmasa ham hissiyat videosi ko'rinib tursin
       try {
         if (audio) audio.pause();
         audio = new Audio("data:audio/mpeg;base64," + b64);
@@ -104,8 +108,21 @@ h2{font-size:1.15rem}
   function post(path, opts) { return fetch(path, opts).then(function (r) { return r.json().then(function (j) { j._st = r.status; return j; }); }); }
   function stopMic() { if (mic) { mic.getTracks().forEach(function (t) { t.stop(); }); mic = null; } }
 
+  // ---- avatar: hissiyatga qarab video almashadi ----
+  var av = $("av-v"), avCur = "";
+  var CLIPS = { idle: "media/idle.mp4", speak: "media/speak.mp4", angry: "media/angry.mp4", angry_start: "media/angry_start.mp4", cry: "media/cry.mp4", laugh: "media/laugh.mp4" };
+  function setAv(n) {
+    if (n === avCur) return; avCur = n;
+    av.loop = n !== "angry_start"; av.src = CLIPS[n];
+    var p = av.play(); if (p && p.catch) p.catch(function () {});
+    document.body.classList.toggle("angry", n === "angry" || n === "angry_start");
+  }
+  av.onended = function () { if (avCur === "angry_start") { avCur = ""; setAv("angry"); } };
+  av.onerror = function () { if (avCur === "laugh") { avCur = ""; setAv("speak"); } else { $("av").hidden = true; } };
+  function emoClip(e) { return e === "angry" ? "angry_start" : e === "cry" ? "cry" : e === "happy" ? "laugh" : "speak"; }
+
   function finish(j) {
-    stopMic(); if (tick) clearInterval(tick);
+    stopMic(); if (tick) clearInterval(tick); document.body.classList.remove("angry");
     if (j && j.bot) botUrl = j.bot;
     $("e-p").textContent = (j && j.cta) || "Botga qayting — darsni davom ettiring 👇";
     $("e-bot").href = botUrl; show("s-end");
@@ -116,14 +133,14 @@ h2{font-size:1.15rem}
       $("msg-t").textContent = "Brauzer mos emas"; $("msg-p").textContent = "Telegramning o'zida emas, Chrome yoki Safari'da oching."; return show("s-msg");
     }
     navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function (s) {
-      mic = s; $("log").innerHTML = ""; show("s-chat"); state("Rumiyo o'ylayapti…"); $("b-mic").disabled = true;
+      mic = s; $("log").innerHTML = ""; show("s-chat"); setAv("idle"); state("Rumiyo o'ylayapti…"); $("b-mic").disabled = true;
       post("ai/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: token }) }).then(function (j) {
         if (j.done && !j.ru) return finish(j);
         if (j.error) { state(j.error); return; }
         if (j.bot) botUrl = j.bot;
         $("c-topic").textContent = j.topic ? "Mavzu: " + j.topic : "";
-        setLeft(j.left); log("ai", j.ru, j.uz);
-        return play(j.audio).then(function () { $("b-mic").disabled = false; state("Tugmani bosib ruscha javob bering"); });
+        setLeft(j.left); log("ai", j.ru, j.uz); setAv(emoClip(j.emo));
+        return play(j.audio, j.ru).then(function () { setAv("idle"); $("b-mic").disabled = false; state("Tugmani bosib ruscha javob bering"); });
       }).catch(function () { state("Aloqa xatosi. Sahifani yangilang."); });
     }).catch(function () {
       $("msg-t").textContent = "Mikrofon yopiq"; $("msg-p").textContent = "Brauzer sozlamasidan mikrofonga ruxsat bering va qayta oching."; show("s-msg");
@@ -161,7 +178,7 @@ h2{font-size:1.15rem}
         if ((spoke && silent && now - silent > 1600) || now - t0 > 30000) stopRec();
       }, 150);
     } catch (e) { timer = setInterval(function () { if (Date.now() - t0 > 30000) stopRec(); }, 500); }
-    recorder.start(); rec = true; $("b-mic").classList.add("rec"); state("Eshityapman… gapirib bo'lgach tugmani bosing");
+    recorder.start(); rec = true; setAv("idle"); $("b-mic").classList.add("rec"); state("Eshityapman… gapirib bo'lgach tugmani bosing");
   }
 
   function send(blob, dur) {
@@ -172,8 +189,9 @@ h2{font-size:1.15rem}
         if (j.done && !j.ru) return finish(j);
         if (j.error) { busy = false; $("b-mic").disabled = false; return state(j.error + " Tugmani bosing"); }
         log("me", j.heard); if (j.fix) log("fix", "✏️ " + j.fix);
-        log("ai", j.ru, j.uz); setLeft(j.left);
-        return play(j.audio).then(function () {
+        log("ai", j.ru, j.uz); setLeft(j.left); setAv(emoClip(j.emo));
+        return play(j.audio, j.ru).then(function () {
+          setAv("idle");
           busy = false;
           if (j.done) return finish(j);
           $("b-mic").disabled = false; state("Tugmani bosib javob bering");
