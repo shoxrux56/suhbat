@@ -632,8 +632,6 @@ async def stats(request):
 
 def make_app():
     app = web.Application(client_max_size=4 * 1024 * 1024)
-    import rumiyo
-    rumiyo.add_routes(app, "/rumiyo")   # hazilkash ovozli AI (Rumiyo): /rumiyo/ sahifasi va /rumiyo/ai/*, /rumiyo/admin/*
     app.router.add_post("/ai/start", ai_start)
     app.router.add_post("/ai/turn", ai_turn)
     app.router.add_post("/ai/end", ai_end)
