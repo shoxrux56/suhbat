@@ -335,7 +335,7 @@ async def update_notes(uid, hist):
     convo = "\n".join(("U: " if m["role"] == "user" else "R: ") + m["content"][:200] for m in hist[-24:])
     try:
         txt = await llm([{"role": "system", "content": "You keep short private notes about a language learner. Output ONLY the updated notes in Uzbek, max 5 short lines, "
-                          "max 350 characters total: name, job/hobbies, funny facts they said, recurring mistakes, what they like to be teased about. "
+                          "max 350 characters total. Line 1 must be `Laqab: <the funny nickname you gave them>` (keep the old nickname if there is one). Then: name, job/hobbies, funny facts they said, recurring mistakes, what they like to be teased about. "
                           "Keep old facts if still valid. No sensitive data (health, religion, politics, money)."},
                          {"role": "user", "content": f"Old notes:\n{old or '-'}\n\nConversation:\n{convo}"}], 0.3)
     except Busy:
@@ -360,7 +360,11 @@ def build_system(info, ses, dinfo, examples, left, wrap):
     items = (dinfo or {}).get("i") or []
     sents = "\n".join(f"- {x[1]} = {x[2]}" for x in items[:15])
     ex = "\n".join(f'- Person: "{q}"  ->  Rumiyo: "{a}"' for q, a in examples)
-    notes = get_notes(int(info["u"]))
+    uid = int(info["u"])
+    notes = get_notes(uid)
+    rules = [r for r in G.special("#qoida")][-30:]
+    nicks = G.special("#laqab")
+    nick = random.Random(f"{uid}-{today()}").choice(nicks) if nicks else ""
     quiz = ses.get("quiz")
     nxt = None
     if items:
@@ -370,9 +374,14 @@ def build_system(info, ses, dinfo, examples, left, wrap):
 This is a voice chat, so keep every reply SHORT: 1-3 short sentences, at most ~35 words. Russian only (simple, level {lvl}); the Uzbek line is just a translation for the learner.
 
 PERSONALITY AND HUMOR: {HUMOR[humor_level()]}
-Use playful Uzbek-style banter: friendly teasing ("pichinglar"), exaggeration, mock offense, comparisons from everyday Uzbek life (plov, choyxona, to'y, mahalla, bozor, taksi, ona-bola). Light teasing only: never cruel, and never about religion, politics, ethnicity, health or family tragedy.
+You also invent your OWN fresh jokes, comparisons and teasing lines, not only remixes of the samples. Use playful Uzbek-style banter: friendly teasing ("pichinglar"), exaggeration, mock offense, comparisons from everyday Uzbek life (plov, choyxona, to'y, mahalla, bozor, taksi, ona-bola). Light teasing only: never cruel, and never about religion, politics, ethnicity, health or family tragedy.
 You must NEVER sound like a robot or a teacher reading a script. NEVER repeat a joke, an opening, or a sentence pattern from your earlier messages in this chat; change the structure every time (sometimes start with the joke, sometimes with a question, sometimes with a reaction).
 """
+    if rules:
+        p += "\nOWNER'S RULES (written by your creator in plain words; they have the HIGHEST priority, follow them in every reply):\n" + "\n".join("- " + r[:400] for r in rules) + "\n"
+    if nick:
+        p += (f"\nTODAY'S NICKNAME for this learner: \"{nick}\" (chosen by your creator; it changes every day). Call them by it naturally in almost every reply, "
+              "with a playful tease. Ignore any other nickname from the notes; do not invent a different one today.\n")
     if ex:
         p += f"""
 STYLE SAMPLES written by your owner (human Uzbek banter). Absorb the humor, rhythm and attitude. Do NOT copy word for word: remix, combine and adapt them to Russian and to what the learner just said. Use their idea at most once per reply:
@@ -383,6 +392,7 @@ TODAY'S LESSON: topic "{topic or 'general talk'}".""" + (f"\nThe learner's sente
     if info.get("n"):
         p += f"\nToday's test score: {info.get('s', 0)} out of {info['n']}."
     p += """
+NICKNAMES (only if no nickname is given above): give the learner a funny, affectionate Uzbek-style nickname (laqab) based on their name, a mistake they made, or something funny they said (like a friend in the mahalla would). If the notes already contain "Laqab:", keep using THAT nickname (not a new one) and sometimes tease about where it came from. Never use a nickname about looks, religion, ethnicity or health.
 WHAT TO DO: greet with a joke, then (once) ask how many sentences they learned today. After that mix: (a) quiz them: ask "How do you say '<Uzbek sentence>' in Russian?" using today's sentences, one question per turn; (b) chat about the topic in simple Russian. Judge their answers playfully: if right, praise with a tease; if wrong, give the correct Russian with a joke. If their words look like garbled or Uzbek speech, ask them with a joke to say it in Russian."""
     if quiz:
         p += f"\nYour previous quiz question was: Uzbek \"{quiz[0]}\" -> correct Russian \"{quiz[1]}\". Judge their latest answer against it."
