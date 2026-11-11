@@ -282,6 +282,15 @@ async def tts(text):
     return out
 
 
+async def tts_safe(text):
+    """Ovoz chiqmasa ham javob matni yo'qolmasin (Microsoft TTS vaqtincha ishlamasa)."""
+    try:
+        return await tts(text)
+    except Exception as e:
+        print("TTS xato:", type(e).__name__, str(e)[:120])
+        return b""
+
+
 # ---------- bugungi dars (trener data.js) ----------
 _days = {"ts": 0, "map": {}}
 
@@ -416,7 +425,8 @@ OUTPUT FORMAT, exactly three lines:
 RU: <your reply in Russian>
 UZ: <Uzbek translation of your reply>
 FIX: <in Uzbek: if the learner's last Russian had a mistake, write "wrong -> correct" plus a very short reason; otherwise just a dash ->
-Also add on a 4th line `Q: <Uzbek sentence> | <Russian sentence>` ONLY if you asked a quiz question in this reply."""
+EMO: <one word: angry (you are furious/scolding), cry (you are crying dramatically, e.g. the learner keeps failing or you threaten to quit), happy (you laughed or are pleased), or normal>
+Also add one more line `Q: <Uzbek sentence> | <Russian sentence>` ONLY if you asked a quiz question in this reply."""
     return p, nxt
 
 
@@ -426,15 +436,17 @@ def parse(text):
         m = re.search(rf"^\s*{tag}\s*:\s*(.+)$", t, re.M | re.I)
         return m.group(1).strip() if m else ""
     ru, uz, fix, q = g("RU"), g("UZ"), g("FIX"), g("Q")
+    emo = g("EMO").lower().strip(" .`*")
+    emo = emo if emo in ("angry", "cry", "happy") else "normal"
     if not ru:
-        ru = re.sub(r"^(UZ|FIX|Q)\s*:.*$", "", t, flags=re.M | re.I).strip()
+        ru = re.sub(r"^(UZ|FIX|Q|EMO)\s*:.*$", "", t, flags=re.M | re.I).strip()
     if fix in ("-", "—", "–", ""):
         fix = ""
     quiz = None
     if "|" in q:
         a, b = q.split("|", 1)
         quiz = (a.strip(" \"'"), b.strip(" \"'"))
-    return ru[:400], uz[:400], fix[:300], quiz
+    return ru[:400], uz[:400], fix[:300], quiz, emo
 
 
 def too_similar(ru, hist):
@@ -458,11 +470,11 @@ async def reply_for(info, ses, dinfo, user_text, left):
     sysmsg, nxt = build_system(info, ses, dinfo, ex, left, wrap)
     hist = ses["hist"] + [{"role": "user", "content": user_text}]
     base = [{"role": "system", "content": sysmsg}] + hist
-    ru, uz, fix, quiz = parse(await llm(base, 0.95))
+    ru, uz, fix, quiz, emo = parse(await llm(base, 0.95))
     if ru and too_similar(ru, ses["hist"]):
         retry = base + [{"role": "system", "content": "Your draft was too similar to an earlier message. Write something completely different: another outburst, another structure."}]
         try:
-            ru, uz, fix, quiz = parse(await llm(retry, 1.05))
+            ru, uz, fix, quiz, emo = parse(await llm(retry, 1.05))
         except Busy:
             pass
     if quiz:
@@ -473,7 +485,9 @@ async def reply_for(info, ses, dinfo, user_text, left):
         ses["quiz"] = None
     ses["hist"] = (hist + [{"role": "assistant", "content": "RU: " + ru}])[-mem_msgs():]
     ses["turns"] += 1
-    return ru, uz, fix, wrap
+    if emo == "normal" and fix:
+        emo = "angry"          # xato qilgan bo'lsa, jahldor ustoz jahli chiqadi
+    return ru, uz, fix, wrap, emo
 
 
 # ---------- endpoints ----------
@@ -498,13 +512,13 @@ async def ai_start(request):
               else "(o'quvchi endigina chatni ochdi — jahldor ohangda salom ber va bugungi mavzuga ulab, bugun nechta gap yodlaganini so'ra)")
     try:
         async with gate:
-            ru, uz, _fix, _w = await reply_for(info, ses, dinfo, opener, left)
-            audio = await tts(ru) if ru else b""
+            ru, uz, _fix, _w, emo = await reply_for(info, ses, dinfo, opener, left)
+            audio = await tts_safe(ru) if ru else b""
     except Exception as e:
         print("start:", type(e).__name__, str(e)[:160])
-        ru, uz, audio = "Привет! Я Румиё. Давай поболтаем про сегодняшний урок!", "Salom! Men Rumiyoman. Keling, bugungi dars haqida gaplashamiz!", b""
+        ru, uz, audio, emo = "Привет! Я Румиё. Давай поболтаем про сегодняшний урок!", "Salom! Men Rumiyoman. Keling, bugungi dars haqida gaplashamiz!", b"", "normal"
         ses["hist"].append({"role": "assistant", "content": "RU: " + ru})
-    return web.json_response({"ru": ru, "uz": uz, "audio": base64.b64encode(audio).decode(), "left": left,
+    return web.json_response({"ru": ru, "uz": uz, "emo": emo, "audio": base64.b64encode(audio).decode(), "left": left,
                               "topic": topic, "returning": again, "bot": BOT_URL})
 
 
@@ -530,8 +544,8 @@ async def ai_turn(request):
             heard = await stt(raw, request.headers.get("Content-Type", ""))
             if not heard:
                 return web.json_response({"error": "Ovozni eshita olmadim. Aniqroq gapiring."}, status=422)
-            ru, uz, fix, wrap = await reply_for(info, ses, dinfo, heard, left)
-            audio = await tts(ru) if ru else b""
+            ru, uz, fix, wrap, emo = await reply_for(info, ses, dinfo, heard, left)
+            audio = await tts_safe(ru) if ru else b""
     except Busy:
         return web.json_response({"error": "Rumiyo hozir band. Bir oz kutib, qayta urinib ko'ring."}, status=429)
     except Exception as e:
@@ -542,7 +556,7 @@ async def ai_turn(request):
     done = left <= 0 or wrap
     if done:
         asyncio.create_task(update_notes(uid, list(ses["hist"])))
-    out = {"heard": heard, "ru": ru, "uz": uz, "fix": fix, "audio": base64.b64encode(audio).decode(), "left": left, "done": done}
+    out = {"heard": heard, "ru": ru, "uz": uz, "fix": fix, "emo": emo, "audio": base64.b64encode(audio).decode(), "left": left, "done": done}
     if done:
         out.update({"cta": cta_text(), "bot": BOT_URL})
     return web.json_response(out)
@@ -651,6 +665,9 @@ def add_routes(app, prefix=""):
     app.router.add_post(p + "/admin/keys", admin_keys)
     app.router.add_get(p + "/admin/stats", admin_stats)
     app.router.add_get(p + "/", page)
+    media = os.path.join(HERE, "media")
+    if os.path.isdir(media):
+        app.router.add_static(p + "/media", media)       # avatar videolari: idle, speak, angry, angry_start, cry, laugh
     if p:
         async def to_slash(request):
             raise web.HTTPFound(p + "/" + ("?" + request.query_string if request.query_string else ""))
