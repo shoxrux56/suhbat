@@ -93,7 +93,7 @@ def export():
 
 def sample(n=3, humor=1):
     """Kam ishlatilgan tasodifiy n ta juftlik: salomlashish va o'z-o'zidan hazil uchun o'rnak."""
-    rows = db.execute("SELECT id, q, a FROM juftlar" + (" WHERE tone=0" if humor <= 0 else "")
+    rows = db.execute("SELECT id, q, a FROM juftlar WHERE q NOT LIKE '#%'" + (" AND tone=0" if humor <= 0 else "")
                       + " ORDER BY used + (abs(random()) % 4), last_used LIMIT ?", (max(1, int(n)),)).fetchall()
     now = int(time.time())
     for i, _, _ in rows:
@@ -110,7 +110,7 @@ def find(text, n=2, humor=1):
         return []
     m = " OR ".join('"%s"' % w.replace('"', "") for w in ws)
     q = ("SELECT j.id, j.q, j.a FROM juftlar_q f JOIN juftlar j ON j.id=f.rowid WHERE juftlar_q MATCH ?"
-         + (" AND j.tone=0" if humor <= 0 else "") + " ORDER BY bm25(juftlar_q), j.used, j.last_used LIMIT 8")
+         + " AND j.q NOT LIKE '#%'" + (" AND j.tone=0" if humor <= 0 else "") + " ORDER BY bm25(juftlar_q), j.used, j.last_used LIMIT 8")
     rows = db.execute(q, (m,)).fetchall()
     rows = rows[: max(1, int(n))]
     now = int(time.time())
@@ -118,6 +118,11 @@ def find(text, n=2, humor=1):
         db.execute("UPDATE juftlar SET used=used+1, last_used=? WHERE id=?", (now, i))
     db.commit()
     return [(a, b) for _, a, b in rows]
+
+
+def special(kind):
+    """Maxsus yozuvlar: kind='#qoida' (AI ga ko'rsatma) yoki '#laqab' (laqablar ro'yxati). Matnlar ro'yxati."""
+    return [a for (a,) in db.execute("SELECT a FROM juftlar WHERE q=? ORDER BY id", (kind,))]
 
 
 def setting(k, default=None):
